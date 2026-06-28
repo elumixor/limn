@@ -13,7 +13,7 @@
 		onconnectorstart: (id: string, e: PointerEvent) => void;
 	} = $props();
 
-	const selected = $derived(editor.selected?.kind === "block" && editor.selected.id === block.id);
+	const selected = $derived(editor.isBlockSelected(block.id));
 	const editingName = $derived(editor.editing?.id === block.id && editor.editing.part === "name");
 	const showComments = $derived((block.showComments ?? true) && block.comments.length > 0);
 
@@ -55,7 +55,7 @@
 	use:measure
 >
 	<div class="head">
-		{#if block.children.length}
+		{#if root && block.children.length}
 			<button
 				class="caret"
 				class:collapsed={block.collapsed}
@@ -73,7 +73,9 @@
 				onpointerdown={(e) => e.stopPropagation()}
 				oninput={(e) => editor.rename(block.id, e.currentTarget.value)}
 				onfocus={() => editor.beginTextEdit(`name:${block.id}`)}
-				onblur={() => (editor.editing = null)}
+				onblur={() => {
+					if (editor.editing?.id === block.id && editor.editing.part === "name") editor.editing = null;
+				}}
 				onkeydown={(e) => {
 					if (e.key === "Enter" || e.key === "Escape") {
 						e.preventDefault();
@@ -82,9 +84,7 @@
 				}}
 			/>
 		{:else}
-			<span class="name" ondblclick={() => (editor.editing = { id: block.id, part: "name" })} role="textbox" tabindex="-1"
-				>{block.name || "Untitled"}</span
-			>
+			<span class="name" data-edit="name" role="textbox" tabindex="-1">{block.name || "Untitled"}</span>
 		{/if}
 
 		{#if !showComments && block.comments.length}
@@ -117,18 +117,16 @@
 							onpointerdown={(e) => e.stopPropagation()}
 							oninput={(e) => editor.updateComment(block.id, i, e.currentTarget.value)}
 							onfocus={() => editor.beginTextEdit(`c:${block.id}:${i}`)}
-							onblur={() => (editor.editing = null)}
+							onblur={() => {
+								if (editor.editing?.id === block.id && editor.editing.part === "comment" && editor.editing.index === i)
+									editor.editing = null;
+							}}
 							onkeydown={(e) => {
 								if (e.key === "Escape") editor.editing = null;
 							}}
 						></textarea>
 					{:else}
-						<span
-							class="comment-text"
-							ondblclick={() => (editor.editing = { id: block.id, part: "comment", index: i })}
-							role="textbox"
-							tabindex="-1">{c || "comment…"}</span
-						>
+						<span class="comment-text" data-edit="comment" data-ci={i} role="textbox" tabindex="-1">{c || "comment…"}</span>
 					{/if}
 					<button
 						class="del"
@@ -141,7 +139,7 @@
 		</div>
 	{/if}
 
-	{#if block.children.length && !block.collapsed}
+	{#if block.children.length && !(root && block.collapsed)}
 		<div class="children">
 			{#each block.children as child (child.id)}
 				<Self block={child} {onconnectorstart} />
@@ -220,6 +218,14 @@
 	}
 	.name {
 		user-select: none;
+		cursor: text;
+		border-radius: 4px;
+		padding: 1px 5px;
+		margin: -1px 0;
+	}
+	.name:hover {
+		background: var(--accent, #f4f4f5);
+		box-shadow: inset 0 0 0 1px var(--border, #e4e4e7);
 	}
 	.name-input {
 		border: none;
@@ -275,6 +281,13 @@
 		word-break: break-word;
 		cursor: text;
 		min-height: 16px;
+		border-radius: 4px;
+		padding: 1px 4px;
+		margin: -1px 0;
+	}
+	.comment-text:hover {
+		background: var(--accent, #f4f4f5);
+		box-shadow: inset 0 0 0 1px var(--border, #e4e4e7);
 	}
 	.comment textarea {
 		flex: 1;
@@ -308,8 +321,6 @@
 		display: flex;
 		flex-direction: column;
 		gap: 5px;
-		padding: 0 9px 9px 18px;
-		border-left: 2px solid var(--border, #f1f1f3);
-		margin-left: 9px;
+		padding: 0 9px 9px 9px;
 	}
 </style>

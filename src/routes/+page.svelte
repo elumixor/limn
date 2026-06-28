@@ -11,12 +11,15 @@
 	}
 
 	function addBoxAtMouse() {
-		const el = document.querySelector(".canvas") as HTMLElement | null;
+		const el = document.querySelector(".viewport") as HTMLElement | null;
 		const r = el?.getBoundingClientRect();
-		const over = r && mouse.y > r.top && mouse.x > r.left;
-		const x = over ? mouse.x - r.left + (el?.scrollLeft ?? 0) - 85 : (el?.scrollLeft ?? 0) + 80;
-		const y = over ? mouse.y - r.top + (el?.scrollTop ?? 0) - 20 : (el?.scrollTop ?? 0) + 80;
-		editor.addRootBlock(Math.max(8, x), Math.max(8, y));
+		const over = r && mouse.y > r.top && mouse.x > r.left && mouse.y < r.bottom && mouse.x < r.right;
+		const cx = over ? mouse.x : (r?.left ?? 0) + 200;
+		const cy = over ? mouse.y : (r?.top ?? 0) + 160;
+		// convert screen → content coords (account for pan)
+		const x = cx - (r?.left ?? 0) - editor.pan.x - 85;
+		const y = cy - (r?.top ?? 0) - editor.pan.y - 20;
+		editor.addRootBlock(x, y);
 	}
 
 	function onKeydown(e: KeyboardEvent) {
@@ -88,7 +91,18 @@
 <svelte:window onkeydown={onKeydown} onpointermove={(e) => (mouse = { x: e.clientX, y: e.clientY })} />
 
 <div class="app">
-	<Canvas />
+	<main><Canvas /></main>
+
+	<footer class="hints">
+		<span><kbd>N</kbd> box</span>
+		<span><kbd>F</kbd> subblock</span>
+		<span><kbd>A</kbd> comment</span>
+		<span><kbd>C</kbd> connect</span>
+		<span><kbd>↵</kbd> rename</span>
+		<span><kbd>⌫</kbd> delete</span>
+		<span><kbd>⌘Z</kbd> undo</span>
+		<span class="dim">click to edit · drag to move · drag onto a box to nest · drag the dot to connect · autosaved</span>
+	</footer>
 
 	<div class="title">Limn</div>
 
@@ -119,10 +133,45 @@
 		-webkit-font-smoothing: antialiased;
 	}
 	.app {
-		position: relative;
+		display: flex;
+		flex-direction: column;
 		height: 100vh;
 		width: 100vw;
 		overflow: hidden;
+	}
+	main {
+		flex: 1;
+		min-height: 0;
+		position: relative;
+	}
+	.hints {
+		display: flex;
+		align-items: center;
+		gap: 14px;
+		padding: 6px 14px;
+		background: var(--card);
+		border-top: 1px solid var(--border);
+		font-size: 12px;
+		color: var(--muted-fg);
+		z-index: 5;
+	}
+	.hints span {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+	}
+	.hints .dim {
+		margin-left: auto;
+		opacity: 0.7;
+	}
+	.hints kbd {
+		font-family: ui-monospace, monospace;
+		font-size: 10px;
+		background: var(--muted);
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		padding: 1px 5px;
+		color: var(--muted-fg);
 	}
 	.title {
 		position: fixed;

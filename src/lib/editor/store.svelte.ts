@@ -26,8 +26,6 @@ function newBlock(name = "Untitled"): Block {
 	return { id: uid("b"), name, comments: [], children: [] };
 }
 
-export type Selection = { kind: "block"; id: string } | { kind: "connector"; id: string } | null;
-
 export type Editing =
 	| { id: string; part: "name" }
 	| { id: string; part: "comment"; index: number }
@@ -47,12 +45,16 @@ function loadInitial(): Diagram {
 
 class EditorStore {
 	diagram = $state<Diagram>(loadInitial());
-	selected = $state<Selection>(null);
+	/** Selected block ids (multi-select). The last entry is the "primary". */
+	selectedBlocks = $state<string[]>([]);
+	selectedConnector = $state<string | null>(null);
 	editing = $state<Editing>(null);
 	pendingConnector = $state<string | null>(null);
 
 	/** Measured sizes of rendered ROOT blocks (not persisted) — for connector geometry. */
 	sizes = $state(new Map<string, { w: number; h: number }>());
+	/** Canvas pan offset (infinite scrolling). */
+	pan = $state({ x: 0, y: 0 });
 
 	// ---- history ------------------------------------------------------------
 	#undo: string[] = [];
@@ -76,6 +78,9 @@ class EditorStore {
 		this.#coalesceAt = now;
 	}
 
+	snapshot() {
+		this.#record();
+	}
 	beginTextEdit(key: string) {
 		this.#record(key);
 	}
@@ -88,7 +93,6 @@ class EditorStore {
 		this.editing = null;
 		this.#prune();
 	}
-
 	redo() {
 		if (!this.#redo.length) return;
 		this.#undo.push(serialize(this.diagram));
@@ -98,21 +102,47 @@ class EditorStore {
 		this.#prune();
 	}
 
+	// ---- selection ----------------------------------------------------------
+	selectBlock(id: string) {
+		this.selectedBlocks = [id];
+		this.selectedConnector = null;
+	}
+	selectBlocks(ids: string[]) {
+		this.selectedBlocks = ids;
+		this.selectedConnector = null;
+	}
+	addToSelection(id: string) {
+		if (!this.selectedBlocks.includes(id)) this.selectedBlocks = [...this.selectedBlocks, id];
+		this.selectedConnector = null;
+	}
+	selectConnector(id: string) {
+		this.selectedConnector = id;
+		this.selectedBlocks = [];
+	}
+	clearSelection() {
+		this.selectedBlocks = [];
+		this.selectedConnector = null;
+	}
+	isBlockSelected(id: string) {
+		return this.selectedBlocks.includes(id);
+	}
+	get selectedBlock(): Block | undefined {
+		const id = this.selectedBlocks.at(-1);
+		return id ? this.block(id) : undefined;
+	}
+
 	// ---- lookups ------------------------------------------------------------
 	block(id: string): Block | undefined {
 		return findBlock(this.diagram, id);
-	}
-	get selectedBlock(): Block | undefined {
-		return this.selected?.kind === "block" ? this.block(this.selected.id) : undefined;
 	}
 	isRoot(id: string): boolean {
 		return isRoot(this.diagram, id);
 	}
 
 	#prune() {
-		const s = this.selected;
-		if (s?.kind === "block" && !this.block(s.id)) this.selected = null;
-		if (s?.kind === "connector" && !this.diagram.connectors.some((c) => c.id === s.id)) this.selected = null;
+		this.selectedBlocks = this.selectedBlocks.filter((id) => this.block(id));
+		if (this.selectedConnector && !this.diagram.connectors.some((c) => c.id === this.selectedConnector))
+			this.selectedConnector = null;
 	}
 
 	// ---- block mutations ----------------------------------------------------
@@ -122,7 +152,7 @@ class EditorStore {
 		b.x = x;
 		b.y = y;
 		this.diagram.blocks.push(b);
-		this.selected = { kind: "block", id: b.id };
+		this.selectBlock(b.id);
 		this.editing = { id: b.id, part: "name" };
 		return b;
 	}
@@ -134,7 +164,7 @@ class EditorStore {
 		const b = newBlock("property");
 		parent.children.push(b);
 		parent.collapsed = false;
-		this.selected = { kind: "block", id: b.id };
+		this.selectBlock(b.id);
 		this.editing = { id: b.id, part: "name" };
 		return b;
 	}
@@ -144,20 +174,16 @@ class EditorStore {
 		if (b) b.name = name;
 	}
 
-	deleteBlock(id: string) {
+	#removeBlock(id: string) {
 		const owner = ownerList(this.diagram, id);
-		if (!owner) return;
-		this.#record();
-		// Collect the subtree ids so we can drop their connectors too.
+		const block = this.block(id);
+		if (!owner || !block) return;
 		const removed = new Set<string>();
-		const b = this.block(id);
-		if (b) {
-			const collect = (x: Block) => {
-				removed.add(x.id);
-				x.children.forEach(collect);
-			};
-			collect(b);
-		}
+		const collect = (x: Block) => {
+			removed.add(x.id);
+			x.children.forEach(collect);
+		};
+		collect(block);
 		owner.list.splice(
 			owner.list.findIndex((x) => x.id === id),
 			1,
@@ -165,7 +191,12 @@ class EditorStore {
 		this.diagram.connectors = this.diagram.connectors.filter(
 			(c) => !removed.has(c.source) && !removed.has(c.target),
 		);
-		if (this.selected?.kind === "block" && removed.has(this.selected.id)) this.selected = null;
+		this.selectedBlocks = this.selectedBlocks.filter((s) => !removed.has(s));
+	}
+
+	deleteBlock(id: string) {
+		this.#record();
+		this.#removeBlock(id);
 	}
 
 	move(id: string, x: number, y: number) {
@@ -175,22 +206,12 @@ class EditorStore {
 			b.y = y;
 		}
 	}
-	/** Public history checkpoint (call once before a multi-step interaction like a drag). */
-	snapshot() {
-		this.#record();
-	}
 
-	/**
-	 * Reparent a block. `newParentId` null → make it a root at (x,y); otherwise
-	 * append it to that parent's children. No-op on cycles. Pass `record:false`
-	 * when a surrounding interaction already took a history snapshot.
-	 */
 	reparent(id: string, newParentId: string | null, x = 80, y = 80, opts: { record?: boolean } = {}) {
 		if (newParentId && (newParentId === id || isAncestor(this.diagram, id, newParentId))) return;
 		const owner = ownerList(this.diagram, id);
 		const block = this.block(id);
 		if (!owner || !block) return;
-		// already in place?
 		if (newParentId === null && owner.parent === null) {
 			this.move(id, x, y);
 			return;
@@ -212,7 +233,6 @@ class EditorStore {
 			const parent = this.block(newParentId);
 			parent?.children.push(block);
 			if (parent) parent.collapsed = false;
-			// connectors only render between roots; drop any touching the now-nested subtree
 			const nested = new Set<string>();
 			const collect = (b: Block) => {
 				nested.add(b.id);
@@ -225,10 +245,6 @@ class EditorStore {
 		}
 	}
 
-	toggleComments(id: string) {
-		const b = this.block(id);
-		if (b) b.showComments = !(b.showComments ?? true);
-	}
 	toggleCollapsed(id: string) {
 		const b = this.block(id);
 		if (b) b.collapsed = !b.collapsed;
@@ -241,7 +257,7 @@ class EditorStore {
 		this.#record();
 		b.comments.push("");
 		b.showComments = true;
-		this.selected = { kind: "block", id };
+		this.selectBlock(id);
 		this.editing = { id, part: "comment", index: b.comments.length - 1 };
 	}
 	updateComment(id: string, index: number, text: string) {
@@ -267,7 +283,7 @@ class EditorStore {
 		this.#record();
 		const c: Connector = { id: uid("c"), source: src, target: targetId, kind: "arrow" };
 		this.diagram.connectors.push(c);
-		this.selected = { kind: "connector", id: c.id };
+		this.selectConnector(c.id);
 		return c;
 	}
 	cycleConnectorKind(id: string) {
@@ -284,14 +300,19 @@ class EditorStore {
 	deleteConnector(id: string) {
 		this.#record();
 		this.diagram.connectors = this.diagram.connectors.filter((c) => c.id !== id);
-		if (this.selected?.kind === "connector" && this.selected.id === id) this.selected = null;
+		if (this.selectedConnector === id) this.selectedConnector = null;
 	}
 
 	// ---- keyboard-driven ops ------------------------------------------------
 	deleteSelected() {
-		const s = this.selected;
-		if (s?.kind === "block") this.deleteBlock(s.id);
-		else if (s?.kind === "connector") this.deleteConnector(s.id);
+		if (this.selectedConnector) {
+			this.deleteConnector(this.selectedConnector);
+			return;
+		}
+		const ids = [...this.selectedBlocks];
+		if (!ids.length) return;
+		this.#record();
+		for (const id of ids) this.#removeBlock(id);
 	}
 	addChildToSelected() {
 		if (this.selectedBlock) this.addChild(this.selectedBlock.id);
@@ -300,16 +321,18 @@ class EditorStore {
 		if (this.selectedBlock) this.addComment(this.selectedBlock.id);
 	}
 	startConnectorFromSelected() {
-		if (this.selected?.kind === "block") this.startConnector(this.selected.id);
+		const id = this.selectedBlocks.at(-1);
+		if (id) this.startConnector(id);
 	}
 	editSelectedName() {
-		if (this.selected?.kind === "block") this.editing = { id: this.selected.id, part: "name" };
+		const id = this.selectedBlocks.at(-1);
+		if (id) this.editing = { id, part: "name" };
 	}
 
 	clear() {
 		this.#record();
 		this.diagram = emptyDiagram();
-		this.selected = null;
+		this.clearSelection();
 		this.editing = null;
 		this.pendingConnector = null;
 	}
@@ -321,7 +344,7 @@ class EditorStore {
 	loadJSON(json: string) {
 		this.#record();
 		this.diagram = validate(JSON.parse(json));
-		this.selected = null;
+		this.clearSelection();
 		this.editing = null;
 		this.pendingConnector = null;
 	}
