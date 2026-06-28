@@ -224,14 +224,11 @@
 		e.preventDefault();
 		if (id) {
 			if (!editor.isBlockSelected(id)) editor.selectBlock(id);
-			const b = editor.block(id);
 			const nested = !editor.isRoot(id);
 			const items: MenuItem[] = [
 				{ label: "Add subblock", hint: "F", action: () => editor.addChild(id) },
 				{ label: "Add comment", hint: "A", action: () => editor.addComment(id) },
 			];
-			if (!nested && b?.children.length)
-				items.push({ label: b.collapsed ? "Expand" : "Collapse", action: () => editor.toggleCollapsed(id) });
 			if (!nested) items.push({ label: "Connect from here", hint: "C", action: () => editor.startConnector(id) });
 			if (nested) {
 				const r = (e.target as HTMLElement).closest("[data-block-id]")?.getBoundingClientRect();

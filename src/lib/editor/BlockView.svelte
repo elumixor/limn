@@ -55,15 +55,6 @@
 	use:measure
 >
 	<div class="head">
-		{#if root && block.children.length}
-			<button
-				class="caret"
-				class:collapsed={block.collapsed}
-				aria-label="Toggle children"
-				onpointerdown={(e) => e.stopPropagation()}
-				onclick={() => editor.toggleCollapsed(block.id)}>▾</button
-			>
-		{/if}
 
 		{#if editingName}
 			<input
@@ -139,7 +130,7 @@
 		</div>
 	{/if}
 
-	{#if block.children.length && !(root && block.collapsed)}
+	{#if block.children.length}
 		<div class="children">
 			{#each block.children as child (child.id)}
 				<Self block={child} {onconnectorstart} />
@@ -186,19 +177,6 @@
 		gap: 5px;
 		padding: 7px 9px;
 		position: relative;
-	}
-	.caret {
-		border: none;
-		background: none;
-		color: var(--muted-fg, #a1a1aa);
-		cursor: pointer;
-		font-size: 10px;
-		padding: 0;
-		width: 12px;
-		transition: transform 0.12s;
-	}
-	.caret.collapsed {
-		transform: rotate(-90deg);
 	}
 	.name,
 	.name-input {
