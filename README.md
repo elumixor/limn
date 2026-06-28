@@ -1,69 +1,72 @@
 # Limn
 
 A diagram editor whose diagrams are meant to compile into structured LLM prompts
-for app code generation. Right now the focus is the editor itself; the compiler
-exists in the codebase but is not wired into the UI yet (see *Status* below).
+for app code generation. Right now the focus is the editor; the codegen compiler
+will be added back over this model once the editing experience is right.
 
-## The diagram model
+## The model
 
-A diagram is a loose typed graph, serialized as plain JSON (zero-loss
-round-trip). Deliberately unopinionated — no rigid component/screen/model split:
+Everything is a recursive **Block**:
 
-- **Boxes** — a name, a free-text description, typed fields (`name: type`), and
-  free-text comments. A box can be anything: a component, a screen, a model, a
-  service. What it *is* lives in its description and connectors, not a fixed kind.
-- **Connectors** — directed relationships between boxes, with a free-text label
-  (e.g. "renders", "onSubmit → addTodo") and optional comments.
+- `name`
+- `comments[]` — free text (description, type, intent); toggleable inline per block
+- `children[]` — nested blocks
 
-See `src/lib/diagram/types.ts`.
+There is no separate field / property / component distinction. A "property" is
+just a child block; a sub-component is just a child block. Depth and comments
+carry the meaning, and it all concatenates to text later.
+
+Root blocks live on the canvas (they have `x`/`y`); nested blocks flow inside
+their parent. **Connectors** relate two root blocks and have a `kind`
+(`line` / `arrow` / `double`) plus an optional `description` (default reads as
+"source → target"). See `src/lib/diagram/types.ts`.
+
+Plain JSON, zero-loss round-trip.
 
 ## The editor
 
-A SvelteKit + Svelte 5 app. Everything is edited inline on the canvas — there is
-no separate properties panel.
+SvelteKit + Svelte 5. Full-bleed canvas; the only chrome is a floating title and
+a floating Save / Load dock. Everything is edited inline on the canvas.
 
-- **Inline editing** — click any box's name, description, field name/type, or
-  comment and type. No modal, no side panel.
-- **Connectors** — drag the ↘ handle from one box onto another. Connector labels
-  are editable inline on the canvas.
-- **Context menu** — right-click a box (add field/comment, connect, delete), a
-  connector (delete), or empty canvas (new box, clear).
+- **Select vs drag** — press and release (without moving) selects the deepest
+  block under the cursor; press and move drags. Dragging never selects.
+- **Edit** — double-click a name or comment to edit it.
+- **Nest** — drag a block onto another to nest it; drag a nested block out to the
+  canvas (or use the context menu) to promote it back to a root.
+- **Connect** — drag the small handle on a root block onto another root block.
+  Connectors attach at the closest edge points; right-click to cycle the arrow
+  style, edit the description, or delete.
+- **Comments** — not always shown; toggle per block (a `💬n` badge marks hidden
+  ones).
+- **Context menu** — right-click a block, a connector, or empty canvas.
 - **Keyboard**
   - `N` — new box (at the cursor)
-  - `F` — add a field to the box in context
-  - `A` — add a comment to the box in context
-  - `C` — start a connector from the selected box
-  - `Delete` / `Backspace` — delete the selected box, field, comment, or connector
+  - `F` — add a child block to the selection
+  - `A` — add a comment to the selection
+  - `C` — start a connector from the selected block
+  - `Enter` — rename the selected block
+  - `Delete` / `Backspace` — delete the selection
   - `⌘Z` / `Ctrl+Z` — undo, `⌘⇧Z` / `Ctrl+Y` — redo
-- **Undo / redo** — full history; rapid keystrokes in one field coalesce into a
-  single step.
-- **Autosave** — the diagram persists to `localStorage` on every change and
-  reloads on open. Save / Load export and import JSON.
+- **Undo / redo** — full in-session history; rapid keystrokes coalesce into one
+  step.
+- **Autosave** — persists to `localStorage` on every change; Save / Load export
+  and import JSON.
 
-Editor code lives in `src/lib/editor/` (`store.svelte.ts`, `Canvas.svelte`,
-`BoxCard.svelte`, `ContextMenu.svelte`).
-
-## The compiler (not currently in the UI)
-
-`patch(old, new) -> structured prompt` is the eventual product: a deterministic
-function that diffs two diagram states and emits a precise spec — from scratch
-when `old` is empty, or a patch (with a "leave unaffected code byte-identical"
-instruction) when it isn't. It lives in `src/lib/compiler/` with unit tests, and
-already targets the boxes/connectors model, but it is intentionally **not mounted
-in the editor yet** — we're getting the editing experience right first, then
-wiring codegen back in.
+Editor code: `src/lib/editor/` (`store.svelte.ts`, `Canvas.svelte`,
+`BlockView.svelte`, `ContextMenu.svelte`).
 
 ## Develop
 
 ```sh
 bun install
 bun run dev      # editor at http://localhost:5173
-bun run test     # compiler unit tests (vitest)
 bun run check    # svelte-check / typecheck
 bun run build    # production build
 ```
 
 ## Status
 
-V1, editor-first. Calling an LLM, auto test generation, locking generated code,
-and multi-file project management are out of scope for now.
+Editor-first. The codegen compiler (the eventual product —
+`patch(old, new) -> prompt`) was removed when the model changed and will be
+rewritten over the `Block` model. Calling an LLM, auto test generation, and
+multi-file project management remain out of scope for now.

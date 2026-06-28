@@ -1,14 +1,18 @@
 import {
 	emptyDiagram,
+	findBlock,
+	isAncestor,
+	isRoot,
+	ownerList,
 	serialize,
 	validate,
-	type Box,
+	type Block,
 	type Connector,
+	type ConnectorKind,
 	type Diagram,
-	type Field,
 } from "../diagram";
 
-const STORAGE_KEY = "limn.diagram.v2";
+const STORAGE_KEY = "limn.diagram.v3";
 
 function uid(prefix: string): string {
 	const rand =
@@ -18,12 +22,16 @@ function uid(prefix: string): string {
 	return `${prefix}_${rand}`;
 }
 
-/** What is currently selected (drives keyboard ops and highlight). */
-export type Selection =
-	| { type: "box"; id: string }
-	| { type: "field"; boxId: string; fieldId: string }
-	| { type: "comment"; boxId: string; index: number }
-	| { type: "connector"; id: string }
+function newBlock(name = "Untitled"): Block {
+	return { id: uid("b"), name, comments: [], children: [] };
+}
+
+export type Selection = { kind: "block"; id: string } | { kind: "connector"; id: string } | null;
+
+export type Editing =
+	| { id: string; part: "name" }
+	| { id: string; part: "comment"; index: number }
+	| { id: string; part: "connector" }
 	| null;
 
 function loadInitial(): Diagram {
@@ -40,34 +48,18 @@ function loadInitial(): Diagram {
 class EditorStore {
 	diagram = $state<Diagram>(loadInitial());
 	selected = $state<Selection>(null);
-	/** While drawing a connector, the source box id (else null). */
+	editing = $state<Editing>(null);
 	pendingConnector = $state<string | null>(null);
+
+	/** Measured sizes of rendered ROOT blocks (not persisted) — for connector geometry. */
+	sizes = $state(new Map<string, { w: number; h: number }>());
 
 	// ---- history ------------------------------------------------------------
 	#undo: string[] = [];
 	#redo: string[] = [];
 	#coalesceKey = "";
 	#coalesceAt = 0;
-	// Reactive mirrors of stack depth so toolbar buttons update (plain arrays aren't tracked).
-	undoDepth = $state(0);
-	redoDepth = $state(0);
 
-	get canUndo() {
-		return this.undoDepth > 0;
-	}
-	get canRedo() {
-		return this.redoDepth > 0;
-	}
-
-	#syncDepth() {
-		this.undoDepth = this.#undo.length;
-		this.redoDepth = this.#redo.length;
-	}
-
-	/**
-	 * Capture the current state as an undo point. Call BEFORE mutating.
-	 * `coalesceKey` groups rapid edits (e.g. typing in one field) into one step.
-	 */
 	#record(coalesceKey = "") {
 		const now = Date.now();
 		if (coalesceKey && coalesceKey === this.#coalesceKey && now - this.#coalesceAt < 700) {
@@ -82,10 +74,8 @@ class EditorStore {
 		this.#redo = [];
 		this.#coalesceKey = coalesceKey;
 		this.#coalesceAt = now;
-		this.#syncDepth();
 	}
 
-	/** Record before a text edit; coalesces consecutive keystrokes in one target. */
 	beginTextEdit(key: string) {
 		this.#record(key);
 	}
@@ -95,8 +85,8 @@ class EditorStore {
 		this.#redo.push(serialize(this.diagram));
 		this.diagram = validate(JSON.parse(this.#undo.pop() as string));
 		this.#coalesceKey = "";
-		this.#syncDepth();
-		this.#pruneSelection();
+		this.editing = null;
+		this.#prune();
 	}
 
 	redo() {
@@ -104,175 +94,223 @@ class EditorStore {
 		this.#undo.push(serialize(this.diagram));
 		this.diagram = validate(JSON.parse(this.#redo.pop() as string));
 		this.#coalesceKey = "";
-		this.#syncDepth();
-		this.#pruneSelection();
+		this.editing = null;
+		this.#prune();
 	}
 
 	// ---- lookups ------------------------------------------------------------
-	get selectedBox(): Box | undefined {
+	block(id: string): Block | undefined {
+		return findBlock(this.diagram, id);
+	}
+	get selectedBlock(): Block | undefined {
+		return this.selected?.kind === "block" ? this.block(this.selected.id) : undefined;
+	}
+	isRoot(id: string): boolean {
+		return isRoot(this.diagram, id);
+	}
+
+	#prune() {
 		const s = this.selected;
-		const id = s?.type === "box" ? s.id : s?.type === "field" || s?.type === "comment" ? s.boxId : undefined;
-		return id ? this.diagram.boxes.find((b) => b.id === id) : undefined;
+		if (s?.kind === "block" && !this.block(s.id)) this.selected = null;
+		if (s?.kind === "connector" && !this.diagram.connectors.some((c) => c.id === s.id)) this.selected = null;
 	}
 
-	box(id: string): Box | undefined {
-		return this.diagram.boxes.find((b) => b.id === id);
-	}
-
-	#pruneSelection() {
-		const s = this.selected;
-		if (!s) return;
-		if (s.type === "connector" && !this.diagram.connectors.some((c) => c.id === s.id)) this.selected = null;
-		if ((s.type === "box" || s.type === "field" || s.type === "comment")) {
-			const bid = s.type === "box" ? s.id : s.boxId;
-			if (!this.box(bid)) this.selected = null;
-		}
-	}
-
-	// ---- box mutations ------------------------------------------------------
-	addBox(x = 80, y = 80): Box {
+	// ---- block mutations ----------------------------------------------------
+	addRootBlock(x = 80, y = 80): Block {
 		this.#record();
-		const b: Box = { id: uid("b"), name: "Untitled", description: "", fields: [], comments: [], x, y };
-		this.diagram.boxes.push(b);
-		this.selected = { type: "box", id: b.id };
+		const b = newBlock();
+		b.x = x;
+		b.y = y;
+		this.diagram.blocks.push(b);
+		this.selected = { kind: "block", id: b.id };
+		this.editing = { id: b.id, part: "name" };
 		return b;
 	}
 
-	deleteBox(id: string) {
+	addChild(parentId: string): Block | undefined {
+		const parent = this.block(parentId);
+		if (!parent) return;
 		this.#record();
-		this.diagram.boxes = this.diagram.boxes.filter((b) => b.id !== id);
-		this.diagram.connectors = this.diagram.connectors.filter((c) => c.source !== id && c.target !== id);
-		if (this.selected && "id" in this.selected && this.selected.id === id) this.selected = null;
+		const b = newBlock("property");
+		parent.children.push(b);
+		parent.collapsed = false;
+		this.selected = { kind: "block", id: b.id };
+		this.editing = { id: b.id, part: "name" };
+		return b;
 	}
 
-	moveBox(id: string, x: number, y: number) {
-		const b = this.box(id);
+	rename(id: string, name: string) {
+		const b = this.block(id);
+		if (b) b.name = name;
+	}
+
+	deleteBlock(id: string) {
+		const owner = ownerList(this.diagram, id);
+		if (!owner) return;
+		this.#record();
+		// Collect the subtree ids so we can drop their connectors too.
+		const removed = new Set<string>();
+		const b = this.block(id);
 		if (b) {
+			const collect = (x: Block) => {
+				removed.add(x.id);
+				x.children.forEach(collect);
+			};
+			collect(b);
+		}
+		owner.list.splice(
+			owner.list.findIndex((x) => x.id === id),
+			1,
+		);
+		this.diagram.connectors = this.diagram.connectors.filter(
+			(c) => !removed.has(c.source) && !removed.has(c.target),
+		);
+		if (this.selected?.kind === "block" && removed.has(this.selected.id)) this.selected = null;
+	}
+
+	move(id: string, x: number, y: number) {
+		const b = this.block(id);
+		if (b && this.isRoot(id)) {
 			b.x = x;
 			b.y = y;
 		}
 	}
-
-	/** Snapshot before a drag begins so undo restores the original position. */
-	beginMove() {
+	/** Public history checkpoint (call once before a multi-step interaction like a drag). */
+	snapshot() {
 		this.#record();
 	}
 
-	renameBox(id: string, name: string) {
-		const b = this.box(id);
-		if (b) b.name = name;
+	/**
+	 * Reparent a block. `newParentId` null → make it a root at (x,y); otherwise
+	 * append it to that parent's children. No-op on cycles. Pass `record:false`
+	 * when a surrounding interaction already took a history snapshot.
+	 */
+	reparent(id: string, newParentId: string | null, x = 80, y = 80, opts: { record?: boolean } = {}) {
+		if (newParentId && (newParentId === id || isAncestor(this.diagram, id, newParentId))) return;
+		const owner = ownerList(this.diagram, id);
+		const block = this.block(id);
+		if (!owner || !block) return;
+		// already in place?
+		if (newParentId === null && owner.parent === null) {
+			this.move(id, x, y);
+			return;
+		}
+		if (newParentId && owner.parent?.id === newParentId) return;
+
+		if (opts.record !== false) this.#record();
+		owner.list.splice(
+			owner.list.findIndex((b) => b.id === id),
+			1,
+		);
+		if (newParentId === null) {
+			block.x = x;
+			block.y = y;
+			this.diagram.blocks.push(block);
+		} else {
+			delete block.x;
+			delete block.y;
+			const parent = this.block(newParentId);
+			parent?.children.push(block);
+			if (parent) parent.collapsed = false;
+			// connectors only render between roots; drop any touching the now-nested subtree
+			const nested = new Set<string>();
+			const collect = (b: Block) => {
+				nested.add(b.id);
+				b.children.forEach(collect);
+			};
+			collect(block);
+			this.diagram.connectors = this.diagram.connectors.filter(
+				(c) => !nested.has(c.source) && !nested.has(c.target),
+			);
+		}
 	}
 
-	setDescription(id: string, description: string) {
-		const b = this.box(id);
-		if (b) b.description = description;
+	toggleComments(id: string) {
+		const b = this.block(id);
+		if (b) b.showComments = !(b.showComments ?? true);
 	}
-
-	// ---- fields -------------------------------------------------------------
-	addField(boxId: string): Field | undefined {
-		const b = this.box(boxId);
-		if (!b) return;
-		this.#record();
-		const f: Field = { id: uid("f"), name: "field", type: "string" };
-		b.fields.push(f);
-		this.selected = { type: "field", boxId, fieldId: f.id };
-		return f;
-	}
-
-	updateField(boxId: string, fieldId: string, patch: Partial<Field>) {
-		const f = this.box(boxId)?.fields.find((f) => f.id === fieldId);
-		if (f) Object.assign(f, patch);
-	}
-
-	deleteField(boxId: string, fieldId: string) {
-		const b = this.box(boxId);
-		if (!b) return;
-		this.#record();
-		b.fields = b.fields.filter((f) => f.id !== fieldId);
-		this.selected = { type: "box", id: boxId };
+	toggleCollapsed(id: string) {
+		const b = this.block(id);
+		if (b) b.collapsed = !b.collapsed;
 	}
 
 	// ---- comments -----------------------------------------------------------
-	addComment(boxId: string) {
-		const b = this.box(boxId);
+	addComment(id: string) {
+		const b = this.block(id);
 		if (!b) return;
 		this.#record();
 		b.comments.push("");
-		this.selected = { type: "comment", boxId, index: b.comments.length - 1 };
+		b.showComments = true;
+		this.selected = { kind: "block", id };
+		this.editing = { id, part: "comment", index: b.comments.length - 1 };
 	}
-
-	updateComment(boxId: string, index: number, text: string) {
-		const b = this.box(boxId);
+	updateComment(id: string, index: number, text: string) {
+		const b = this.block(id);
 		if (b && b.comments[index] !== undefined) b.comments[index] = text;
 	}
-
-	deleteComment(boxId: string, index: number) {
-		const b = this.box(boxId);
+	deleteComment(id: string, index: number) {
+		const b = this.block(id);
 		if (!b) return;
 		this.#record();
 		b.comments.splice(index, 1);
-		this.selected = { type: "box", id: boxId };
 	}
 
 	// ---- connectors ---------------------------------------------------------
 	startConnector(sourceId: string) {
-		this.pendingConnector = sourceId;
+		if (this.isRoot(sourceId)) this.pendingConnector = sourceId;
 	}
-
 	completeConnector(targetId: string): Connector | undefined {
 		const src = this.pendingConnector;
 		this.pendingConnector = null;
-		if (!src || src === targetId) return;
+		if (!src || src === targetId || !this.isRoot(targetId)) return;
+		if (this.diagram.connectors.some((c) => c.source === src && c.target === targetId)) return;
 		this.#record();
-		const c: Connector = { id: uid("c"), source: src, target: targetId, label: "", comments: [] };
+		const c: Connector = { id: uid("c"), source: src, target: targetId, kind: "arrow" };
 		this.diagram.connectors.push(c);
-		this.selected = { type: "connector", id: c.id };
+		this.selected = { kind: "connector", id: c.id };
 		return c;
 	}
-
-	updateConnector(id: string, patch: Partial<Connector>) {
+	cycleConnectorKind(id: string) {
 		const c = this.diagram.connectors.find((c) => c.id === id);
-		if (c) Object.assign(c, patch);
+		if (!c) return;
+		this.#record();
+		const order: ConnectorKind[] = ["arrow", "double", "line"];
+		c.kind = order[(order.indexOf(c.kind) + 1) % order.length];
 	}
-
+	setConnectorDescription(id: string, description: string) {
+		const c = this.diagram.connectors.find((c) => c.id === id);
+		if (c) c.description = description;
+	}
 	deleteConnector(id: string) {
 		this.#record();
 		this.diagram.connectors = this.diagram.connectors.filter((c) => c.id !== id);
-		if (this.selected?.type === "connector" && this.selected.id === id) this.selected = null;
+		if (this.selected?.kind === "connector" && this.selected.id === id) this.selected = null;
 	}
 
-	// ---- selection-driven keyboard ops -------------------------------------
+	// ---- keyboard-driven ops ------------------------------------------------
 	deleteSelected() {
 		const s = this.selected;
-		if (!s) return;
-		if (s.type === "box") this.deleteBox(s.id);
-		else if (s.type === "field") this.deleteField(s.boxId, s.fieldId);
-		else if (s.type === "comment") this.deleteComment(s.boxId, s.index);
-		else if (s.type === "connector") this.deleteConnector(s.id);
+		if (s?.kind === "block") this.deleteBlock(s.id);
+		else if (s?.kind === "connector") this.deleteConnector(s.id);
 	}
-
-	/** "F": add a field to whatever box is in context. */
-	addFieldToSelected() {
-		const b = this.selectedBox;
-		if (b) this.addField(b.id);
+	addChildToSelected() {
+		if (this.selectedBlock) this.addChild(this.selectedBlock.id);
 	}
-
-	/** "A": add a comment to whatever box is in context. */
 	addCommentToSelected() {
-		const b = this.selectedBox;
-		if (b) this.addComment(b.id);
+		if (this.selectedBlock) this.addComment(this.selectedBlock.id);
 	}
-
-	/** "C": begin a connector from the selected box. */
 	startConnectorFromSelected() {
-		const b = this.selectedBox;
-		if (b) this.startConnector(b.id);
+		if (this.selected?.kind === "block") this.startConnector(this.selected.id);
+	}
+	editSelectedName() {
+		if (this.selected?.kind === "block") this.editing = { id: this.selected.id, part: "name" };
 	}
 
 	clear() {
 		this.#record();
 		this.diagram = emptyDiagram();
 		this.selected = null;
+		this.editing = null;
 		this.pendingConnector = null;
 	}
 
@@ -280,18 +318,22 @@ class EditorStore {
 	exportJSON(): string {
 		return serialize(this.diagram);
 	}
-
 	loadJSON(json: string) {
 		this.#record();
 		this.diagram = validate(JSON.parse(json));
 		this.selected = null;
+		this.editing = null;
 		this.pendingConnector = null;
+	}
+
+	measure(id: string, w: number, h: number) {
+		const prev = this.sizes.get(id);
+		if (!prev || prev.w !== w || prev.h !== h) this.sizes.set(id, { w, h });
 	}
 }
 
 export const editor = new EditorStore();
 
-// Autosave to localStorage on every change.
 if (typeof window !== "undefined") {
 	$effect.root(() => {
 		$effect(() => {

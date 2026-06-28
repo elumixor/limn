@@ -10,28 +10,13 @@
 		return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
 	}
 
-	function canvasEl() {
-		return document.querySelector(".canvas") as HTMLElement | null;
-	}
-
-	/** Place a box under the cursor when it's over the canvas; otherwise center it. */
 	function addBoxAtMouse() {
-		const el = canvasEl();
+		const el = document.querySelector(".canvas") as HTMLElement | null;
 		const r = el?.getBoundingClientRect();
 		const over = r && mouse.y > r.top && mouse.x > r.left;
-		if (!over) return addBoxCentered();
-		const x = mouse.x - r.left + (el?.scrollLeft ?? 0) - 115;
-		const y = mouse.y - r.top + (el?.scrollTop ?? 0) - 28;
-		editor.addBox(Math.max(8, x), Math.max(8, y));
-	}
-
-	/** Cascade new boxes into the visible top-left of the canvas. */
-	function addBoxCentered() {
-		const el = canvasEl();
-		const n = editor.diagram.boxes.length;
-		const x = (el?.scrollLeft ?? 0) + 60 + (n % 5) * 40;
-		const y = (el?.scrollTop ?? 0) + 50 + (n % 5) * 36;
-		editor.addBox(x, y);
+		const x = over ? mouse.x - r.left + (el?.scrollLeft ?? 0) - 85 : (el?.scrollLeft ?? 0) + 80;
+		const y = over ? mouse.y - r.top + (el?.scrollTop ?? 0) - 20 : (el?.scrollTop ?? 0) + 80;
+		editor.addRootBlock(Math.max(8, x), Math.max(8, y));
 	}
 
 	function onKeydown(e: KeyboardEvent) {
@@ -49,26 +34,31 @@
 		}
 
 		const typing = isTyping(e.target);
-		if ((e.key === "Delete" || e.key === "Backspace") && !typing) {
+		if (typing || mod) return;
+
+		if (e.key === "Delete" || e.key === "Backspace") {
 			e.preventDefault();
 			editor.deleteSelected();
 			return;
 		}
-		if (typing || mod) return;
-
+		if (e.key === "Enter") {
+			e.preventDefault();
+			editor.editSelectedName();
+			return;
+		}
 		switch (e.key.toLowerCase()) {
 			case "n":
 				e.preventDefault();
 				addBoxAtMouse();
 				break;
-			case "c":
-				editor.startConnectorFromSelected();
-				break;
 			case "f":
-				editor.addFieldToSelected();
+				editor.addChildToSelected();
 				break;
 			case "a":
 				editor.addCommentToSelected();
+				break;
+			case "c":
+				editor.startConnectorFromSelected();
 				break;
 		}
 	}
@@ -98,44 +88,15 @@
 <svelte:window onkeydown={onKeydown} onpointermove={(e) => (mouse = { x: e.clientX, y: e.clientY })} />
 
 <div class="app">
-	<header class="topbar">
-		<div class="brand">
-			<span class="logo">Limn</span>
-			<span class="sub">diagram editor</span>
-		</div>
+	<Canvas />
 
-		<div class="spacer"></div>
+	<div class="title">Limn</div>
 
-		<div class="group">
-			<button class="ghost" onclick={() => editor.undo()} disabled={!editor.canUndo} title="Undo (⌘Z)" aria-label="Undo">↶</button>
-			<button class="ghost" onclick={() => editor.redo()} disabled={!editor.canRedo} title="Redo (⌘⇧Z)" aria-label="Redo">↷</button>
-		</div>
-
-		<div class="sep"></div>
-
-		<button class="primary" onclick={addBoxCentered}>+ Box <kbd>N</kbd></button>
-
-		<div class="sep"></div>
-
-		<div class="group">
-			<button class="ghost" onclick={save}>Save</button>
-			<button class="ghost" onclick={() => fileInput.click()}>Load</button>
-			<button class="ghost danger" onclick={() => editor.clear()}>Clear</button>
-		</div>
-		<input bind:this={fileInput} type="file" accept="application/json" onchange={load} hidden />
-	</header>
-
-	<main><Canvas /></main>
-
-	<footer class="hints">
-		<span><kbd>N</kbd> box</span>
-		<span><kbd>F</kbd> field</span>
-		<span><kbd>A</kbd> comment</span>
-		<span><kbd>C</kbd> connect</span>
-		<span><kbd>⌫</kbd> delete</span>
-		<span><kbd>⌘Z</kbd> undo</span>
-		<span class="dim">drag ↘ to connect · right-click for menu · autosaved</span>
-	</footer>
+	<div class="dock">
+		<button onclick={save}>Save</button>
+		<button onclick={() => fileInput.click()}>Load</button>
+	</div>
+	<input bind:this={fileInput} type="file" accept="application/json" onchange={load} hidden />
 </div>
 
 <style>
@@ -153,125 +114,51 @@
 	}
 	:global(body) {
 		margin: 0;
-		font-family:
-			ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+		font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 		color: var(--fg);
 		-webkit-font-smoothing: antialiased;
 	}
 	.app {
-		display: flex;
-		flex-direction: column;
+		position: relative;
 		height: 100vh;
+		width: 100vw;
+		overflow: hidden;
 	}
-	.topbar {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 8px 14px;
-		background: var(--card);
-		border-bottom: 1px solid var(--border);
-	}
-	.brand {
-		display: flex;
-		align-items: baseline;
-		gap: 8px;
-	}
-	.logo {
-		font-size: 17px;
+	.title {
+		position: fixed;
+		top: 16px;
+		left: 18px;
+		font-size: 18px;
 		font-weight: 700;
 		letter-spacing: -0.03em;
+		color: var(--fg);
+		pointer-events: none;
+		user-select: none;
 	}
-	.sub {
-		font-size: 12px;
-		color: var(--muted-fg);
-	}
-	.spacer {
-		flex: 1;
-	}
-	.group {
+	.dock {
+		position: fixed;
+		top: 14px;
+		right: 16px;
 		display: flex;
-		gap: 2px;
+		gap: 6px;
+		padding: 5px;
+		background: var(--card);
+		border: 1px solid var(--border);
+		border-radius: 11px;
+		box-shadow: 0 4px 14px rgb(0 0 0 / 0.08), 0 1px 3px rgb(0 0 0 / 0.06);
 	}
-	.sep {
-		width: 1px;
-		height: 20px;
-		background: var(--border);
-		margin: 0 4px;
-	}
-	button {
+	.dock button {
 		font: inherit;
 		font-size: 13px;
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		padding: 6px 11px;
+		padding: 6px 13px;
 		border-radius: 7px;
-		border: 1px solid transparent;
-		cursor: pointer;
-		transition: background 0.1s, border-color 0.1s;
-	}
-	.ghost {
+		border: none;
 		background: transparent;
 		color: var(--fg);
-		border-color: var(--border);
+		cursor: pointer;
+		transition: background 0.1s;
 	}
-	.ghost:hover:not(:disabled) {
+	.dock button:hover {
 		background: var(--accent);
-	}
-	.ghost:disabled {
-		opacity: 0.4;
-		cursor: not-allowed;
-	}
-	.ghost.danger {
-		color: #dc2626;
-		border-color: #fecaca;
-	}
-	.ghost.danger:hover {
-		background: #fef2f2;
-	}
-	.primary {
-		background: var(--fg);
-		color: #fff;
-		font-weight: 500;
-	}
-	.primary:hover {
-		background: #27272a;
-	}
-	kbd {
-		font-family: ui-monospace, monospace;
-		font-size: 10px;
-		padding: 1px 5px;
-		border-radius: 4px;
-		background: rgb(255 255 255 / 0.15);
-		border: 1px solid rgb(255 255 255 / 0.25);
-	}
-	.hints kbd {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		color: var(--muted-fg);
-	}
-	main {
-		flex: 1;
-		min-height: 0;
-	}
-	.hints {
-		display: flex;
-		align-items: center;
-		gap: 14px;
-		padding: 5px 14px;
-		background: var(--card);
-		border-top: 1px solid var(--border);
-		font-size: 12px;
-		color: var(--muted-fg);
-	}
-	.hints span {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-	}
-	.hints .dim {
-		margin-left: auto;
-		color: var(--muted-fg);
-		opacity: 0.7;
 	}
 </style>
