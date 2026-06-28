@@ -1,14 +1,11 @@
 import type { Diagram } from "../diagram";
 import { diff } from "./diff";
-import { affectedNodes } from "./affected";
-import { combinedNames, emitDiffSummary, emitNode } from "./emit";
+import { affectedBoxes } from "./affected";
+import { combinedNames, emitBox, emitDiffSummary } from "./emit";
 
 export interface PatchResult {
-	/** The structured prompt to paste into an LLM. */
 	prompt: string;
-	/** True when `old` was empty — i.e. a from-scratch generation. */
 	fromScratch: boolean;
-	/** True when nothing changed (prompt explains there's nothing to do). */
 	noChange: boolean;
 }
 
@@ -19,9 +16,11 @@ export interface PatchResult {
  * specifies exactly what to build (from scratch when `old` is empty) or what to
  * change (patching existing code when `old` is non-empty). Same inputs always
  * produce the same output — no randomness, no LLM call.
+ *
+ * NOTE: not currently wired into the editor UI; kept here for the next phase.
  */
 export function patch(oldD: Diagram, newD: Diagram): PatchResult {
-	const fromScratch = oldD.nodes.length === 0 && oldD.edges.length === 0;
+	const fromScratch = oldD.boxes.length === 0 && oldD.connectors.length === 0;
 	const d = diff(oldD, newD);
 	const names = combinedNames(oldD, newD);
 
@@ -33,14 +32,10 @@ export function patch(oldD: Diagram, newD: Diagram): PatchResult {
 			noChange: true,
 		};
 
-	const affected = affectedNodes(newD, d);
-	// Stable ordering: models first (dependencies), then screens, then components.
-	const order = { model: 0, screen: 1, component: 2 } as const;
-	affected.sort((a, b) => order[a.kind] - order[b.kind] || a.name.localeCompare(b.name));
-
-	const specs = affected.map((n) => emitNode(newD, n, names));
-
-	const removed = d.nodes.filter((c) => c.status === "removed");
+	const affected = affectedBoxes(newD, d);
+	affected.sort((a, b) => a.name.localeCompare(b.name));
+	const specs = affected.map((b) => emitBox(newD, b, names));
+	const removed = d.boxes.filter((c) => c.status === "removed");
 
 	const parts: string[] = [];
 
@@ -48,26 +43,22 @@ export function patch(oldD: Diagram, newD: Diagram): PatchResult {
 		parts.push(
 			"# Build specification",
 			"",
-			"Generate a SvelteKit + TypeScript application matching the specification below exactly. Implement every component, screen, and data model as described, with the stated props (and their types), local state, rendering, event wiring, and data flow. Treat each `Intent` line as the authoritative purpose of that node.",
+			"Generate a SvelteKit + TypeScript application matching the specification below exactly. Implement every box as described, with its fields (and their types), described behaviour, comments (as intent), and connections to other boxes.",
 		);
 	} else {
 		parts.push(
 			"# Patch specification",
 			"",
-			"Apply the changes below to the EXISTING codebase. This is a diff: only the listed nodes are affected. Leave every unaffected region of the code byte-identical — do not reformat, reorder, or rewrite code outside the scope described here. Use the existing code as the anchor and make the minimal edits that satisfy the new specification.",
+			"Apply the changes below to the EXISTING codebase. This is a diff: only the listed boxes are affected. Leave every unaffected region of the code byte-identical — do not reformat, reorder, or rewrite code outside the scope described here. Use the existing code as the anchor and make the minimal edits that satisfy the new specification.",
 			"",
 			emitDiffSummary(d, names),
 		);
-		if (removed.length) {
+		if (removed.length)
 			parts.push(
 				"",
 				"## Removals",
-				...removed.map((c) => {
-					const n = c.before;
-					return `- Delete ${n?.kind} \`${n?.name ?? c.id}\` and remove all references to it.`;
-				}),
+				...removed.map((c) => `- Delete \`${c.before?.name ?? c.id}\` and remove all references to it.`),
 			);
-		}
 	}
 
 	parts.push(
@@ -75,7 +66,7 @@ export function patch(oldD: Diagram, newD: Diagram): PatchResult {
 		fromScratch ? "## Specification" : "## Affected specification",
 		fromScratch
 			? ""
-			: "These nodes (the changed nodes and their direct dependents) must match the following after the patch:",
+			: "These boxes (the changed boxes and their direct neighbours) must match the following after the patch:",
 		"",
 		specs.join("\n\n"),
 	);
@@ -84,7 +75,7 @@ export function patch(oldD: Diagram, newD: Diagram): PatchResult {
 		parts.push(
 			"",
 			"---",
-			"Reminder: edit existing files in place. Any component, screen, or model not mentioned above must remain exactly as it is in the current codebase.",
+			"Reminder: edit existing files in place. Any box not mentioned above must remain exactly as it is in the current codebase.",
 		);
 
 	return { prompt: parts.join("\n"), fromScratch, noChange: false };

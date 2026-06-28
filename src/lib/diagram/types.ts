@@ -2,108 +2,58 @@
  * Limn diagram model.
  *
  * A diagram is a typed graph and the single source of truth for an app's
- * structure. It is plain JSON: `JSON.parse(JSON.stringify(diagram))` returns an
- * identical diagram (zero-loss round-trip), because every field below is a
- * JSON-native value.
+ * structure. Deliberately loose: everything is a *box* with a name, a free-text
+ * description, typed fields, and comments — plus *connectors* between boxes.
+ * What a box "is" (a component, a screen, a model, anything) is expressed in its
+ * description and connectors, not a rigid kind.
+ *
+ * It is plain JSON: `JSON.parse(JSON.stringify(diagram))` returns an identical
+ * diagram (zero-loss round-trip).
  */
 
-export const DIAGRAM_VERSION = 1 as const;
+export const DIAGRAM_VERSION = 2 as const;
 
-/** What a node represents. */
-export type NodeKind = "component" | "screen" | "model";
-
-/** A typed field on a component's props or a data model. */
-export interface TypedField {
+/** A typed field on a box (a prop, a model field, a piece of state, whatever). */
+export interface Field {
+	/** Stable id, so a field can be selected/edited/diffed across versions. */
+	id: string;
 	name: string;
-	/** Free-form type expression, e.g. "string", "number", "User", "Todo[]". */
+	/** Free-form type expression, e.g. "string", "User", "Todo[]", "() => void". */
 	type: string;
-	/** When true the field may be absent / undefined. */
-	optional?: boolean;
-	/** Per-field intent the structure alone can't capture. */
+	/** Per-field note / intent. */
 	note?: string;
 }
 
-/** A piece of local (component-owned) reactive state. */
-export interface StateField {
-	name: string;
-	type: string;
-	/** Initial value expression, e.g. "0", "''", "[]", "false". */
-	initial?: string;
-	note?: string;
-}
-
-interface NodeBase {
+/** A node in the diagram. */
+export interface Box {
 	/** Stable unique id. Renames keep the id; only `name` changes. */
 	id: string;
-	kind: NodeKind;
 	name: string;
-	/** Free-text note describing intent the graph can't encode. */
-	annotation?: string;
-	/** Editor canvas position (ignored by the compiler). */
-	x?: number;
-	y?: number;
+	/** Free-text description of what this box is and does. */
+	description?: string;
+	fields: Field[];
+	/** Free-text comments — intent the structure can't capture. Parsed into the prompt. */
+	comments: string[];
+	/** Canvas position. */
+	x: number;
+	y: number;
 }
 
-/** A UI component: typed props, local state, and (via render edges) children. */
-export interface ComponentNode extends NodeBase {
-	kind: "component";
-	props: TypedField[];
-	state: StateField[];
-}
-
-/** A routable screen / page that composes components. */
-export interface ScreenNode extends NodeBase {
-	kind: "screen";
-	/** Route path, e.g. "/", "/todos", "/user/[id]". */
-	route?: string;
-}
-
-/** A data model / entity shape. */
-export interface ModelNode extends NodeBase {
-	kind: "model";
-	fields: TypedField[];
-}
-
-export type DiagramNode = ComponentNode | ScreenNode | ModelNode;
-
-/** How two nodes relate. */
-export type EdgeKind = "render" | "event" | "data";
-
-interface EdgeBase {
+/** A directed relationship between two boxes. */
+export interface Connector {
 	id: string;
-	kind: EdgeKind;
-	/** Source node id. */
+	/** Source box id. */
 	source: string;
-	/** Target node id. */
+	/** Target box id. */
 	target: string;
-	annotation?: string;
+	/** Free-text label describing the relationship, e.g. "renders", "onSubmit → addTodo". */
+	label?: string;
+	/** Free-text comments on the relationship, parsed into the prompt. */
+	comments: string[];
 }
-
-/** `source` renders `target` as a child in its output. */
-export interface RenderEdge extends EdgeBase {
-	kind: "render";
-}
-
-/** An event on `source` is wired to a handler on `target`. */
-export interface EventEdge extends EdgeBase {
-	kind: "event";
-	/** Event name on the source, e.g. "click", "submit", "select". */
-	event: string;
-	/** Handler invoked on the target, e.g. "addTodo", "onSelect". */
-	handler: string;
-}
-
-/** Data flows from `source` to `target`. */
-export interface DataEdge extends EdgeBase {
-	kind: "data";
-	/** What flows, e.g. "todos", "currentUser". Optional. */
-	field?: string;
-}
-
-export type DiagramEdge = RenderEdge | EventEdge | DataEdge;
 
 export interface Diagram {
 	version: typeof DIAGRAM_VERSION;
-	nodes: DiagramNode[];
-	edges: DiagramEdge[];
+	boxes: Box[];
+	connectors: Connector[];
 }

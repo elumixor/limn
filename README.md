@@ -1,74 +1,57 @@
 # Limn
 
-Limn compiles UML/UI diagrams into structured LLM prompts for app code generation.
-
-You draw your app as a typed graph — components, screens, data models, and the
-edges that wire them together — and Limn emits a precise, declarative
-specification you paste into an LLM (Claude Code, etc.). Limn does not call any
-LLM itself; you stay in the loop.
-
-## The core abstraction
-
-Everything is one deterministic function:
-
-```ts
-patch(diagramOld, diagramNew) -> structured prompt
-```
-
-- **From-scratch generation** is just `patch(emptyDiagram(), diagram)`.
-- **Editing** is `patch(previousDiagram, currentDiagram)`.
-
-There is no separate "initial" vs "edit" code path. Every prompt is a diff
-against a prior diagram state, with the empty diagram as the starting point.
-
-Given the same inputs, `patch` always produces the same output — no randomness,
-no network calls.
+A diagram editor whose diagrams are meant to compile into structured LLM prompts
+for app code generation. Right now the focus is the editor itself; the compiler
+exists in the codebase but is not wired into the UI yet (see *Status* below).
 
 ## The diagram model
 
-A diagram is a typed graph, serialized as plain JSON (zero-loss round-trip):
+A diagram is a loose typed graph, serialized as plain JSON (zero-loss
+round-trip). Deliberately unopinionated — no rigid component/screen/model split:
 
-- **Nodes**
-  - `component` — name, typed props, local state (children come from render edges)
-  - `screen` — a routable page that composes components
-  - `model` — a data entity with typed fields
-- **Edges**
-  - `render` — a parent renders a child
-  - `event` — `source.event` is wired to `target.handler`
-  - `data` — data flows from source to target
-- **Annotations** — free-text intent on any node or edge, folded into the prompt
+- **Boxes** — a name, a free-text description, typed fields (`name: type`), and
+  free-text comments. A box can be anything: a component, a screen, a model, a
+  service. What it *is* lives in its description and connectors, not a fixed kind.
+- **Connectors** — directed relationships between boxes, with a free-text label
+  (e.g. "renders", "onSubmit → addTodo") and optional comments.
 
-The diagram is the single source of truth. See `src/lib/diagram/types.ts`.
-
-## The compiler
-
-`patch(old, new)` (in `src/lib/compiler/`) runs four deterministic steps:
-
-1. **Diff** the two graphs into structural changes (added / removed / renamed /
-   modified nodes and edges), with field-level detail.
-2. **Compute the affected subgraph**: changed nodes plus their direct
-   dependents (one hop along edges).
-3. **Emit** a declarative spec for each affected node — props with types, local
-   state, what it renders, event wiring, and data flow — folding annotations in
-   as intent.
-4. For a non-empty `old`, prepend the **diff summary** and an instruction to
-   **patch the existing code as an anchor**, leaving unaffected regions
-   byte-identical.
-
-The compiler is a pure TypeScript module with no UI dependencies, so it is
-testable in isolation.
+See `src/lib/diagram/types.ts`.
 
 ## The editor
 
-A SvelteKit app (`src/routes/`, `src/lib/editor/`) gives you:
+A SvelteKit + Svelte 5 app. Everything is edited inline on the canvas — there is
+no separate properties panel.
 
-- A canvas to place and drag nodes, and draw edges between them.
-- An inspector to edit names, typed props/state/fields, routes, edge wiring, and
-  annotations.
-- A live prompt panel with copy-to-clipboard.
-- **Commit as anchor** — snapshot the current diagram as the new `old`, so the
-  next edits compile to a patch prompt (simulating "code was generated").
-- Save / load the diagram as JSON.
+- **Inline editing** — click any box's name, description, field name/type, or
+  comment and type. No modal, no side panel.
+- **Connectors** — drag the ↘ handle from one box onto another. Connector labels
+  are editable inline on the canvas.
+- **Context menu** — right-click a box (add field/comment, connect, delete), a
+  connector (delete), or empty canvas (new box, clear).
+- **Keyboard**
+  - `N` — new box (at the cursor)
+  - `F` — add a field to the box in context
+  - `A` — add a comment to the box in context
+  - `C` — start a connector from the selected box
+  - `Delete` / `Backspace` — delete the selected box, field, comment, or connector
+  - `⌘Z` / `Ctrl+Z` — undo, `⌘⇧Z` / `Ctrl+Y` — redo
+- **Undo / redo** — full history; rapid keystrokes in one field coalesce into a
+  single step.
+- **Autosave** — the diagram persists to `localStorage` on every change and
+  reloads on open. Save / Load export and import JSON.
+
+Editor code lives in `src/lib/editor/` (`store.svelte.ts`, `Canvas.svelte`,
+`BoxCard.svelte`, `ContextMenu.svelte`).
+
+## The compiler (not currently in the UI)
+
+`patch(old, new) -> structured prompt` is the eventual product: a deterministic
+function that diffs two diagram states and emits a precise spec — from scratch
+when `old` is empty, or a patch (with a "leave unaffected code byte-identical"
+instruction) when it isn't. It lives in `src/lib/compiler/` with unit tests, and
+already targets the boxes/connectors model, but it is intentionally **not mounted
+in the editor yet** — we're getting the editing experience right first, then
+wiring codegen back in.
 
 ## Develop
 
@@ -80,8 +63,7 @@ bun run check    # svelte-check / typecheck
 bun run build    # production build
 ```
 
-## Scope
+## Status
 
-This is V1. It covers the diagram editor and the `patch` compiler. Calling the
-LLM, auto test generation, locking generated code, and multi-file project
-management are out of scope for now.
+V1, editor-first. Calling an LLM, auto test generation, locking generated code,
+and multi-file project management are out of scope for now.

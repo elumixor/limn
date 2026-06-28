@@ -1,31 +1,27 @@
-import type { Diagram, DiagramNode } from "../diagram";
+import type { Box, Diagram } from "../diagram";
 import type { DiffResult } from "./diff";
 
 /**
- * The set of nodes that must appear in the emitted spec: every directly
- * changed node, plus its direct (1-hop) dependents/neighbors in the *new*
- * graph — because a change to a node alters how its renderers, event targets
- * and data consumers must be (re)generated.
+ * The set of boxes that must appear in the emitted spec: every directly changed
+ * box, plus its direct (1-hop) neighbours via connectors in the *new* graph.
  */
-export function affectedNodes(newD: Diagram, d: DiffResult): DiagramNode[] {
-	const byId = new Map(newD.nodes.map((n) => [n.id, n]));
+export function affectedBoxes(newD: Diagram, d: DiffResult): Box[] {
+	const byId = new Map(newD.boxes.map((b) => [b.id, b]));
 	const seed = new Set<string>();
 
-	for (const c of d.nodes) if (c.status !== "removed") seed.add(c.id);
-	// A changed edge affects both endpoints.
-	for (const e of d.edges) {
-		const edge = e.after ?? e.before;
-		if (!edge) continue;
-		if (byId.has(edge.source)) seed.add(edge.source);
-		if (byId.has(edge.target)) seed.add(edge.target);
+	for (const c of d.boxes) if (c.status !== "removed") seed.add(c.id);
+	for (const c of d.connectors) {
+		const conn = c.after ?? c.before;
+		if (!conn) continue;
+		if (byId.has(conn.source)) seed.add(conn.source);
+		if (byId.has(conn.target)) seed.add(conn.target);
 	}
 
-	// Expand by one hop along edges in the new graph.
 	const result = new Set(seed);
-	for (const edge of newD.edges) {
-		if (seed.has(edge.source) && byId.has(edge.target)) result.add(edge.target);
-		if (seed.has(edge.target) && byId.has(edge.source)) result.add(edge.source);
+	for (const conn of newD.connectors) {
+		if (seed.has(conn.source) && byId.has(conn.target)) result.add(conn.target);
+		if (seed.has(conn.target) && byId.has(conn.source)) result.add(conn.source);
 	}
 
-	return [...result].map((id) => byId.get(id)).filter((n): n is DiagramNode => !!n);
+	return [...result].map((id) => byId.get(id)).filter((b): b is Box => !!b);
 }

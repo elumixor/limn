@@ -1,39 +1,35 @@
 import {
 	DIAGRAM_VERSION,
+	type Box,
+	type Connector,
 	type Diagram,
-	type DiagramEdge,
-	type DiagramNode,
 } from "./types";
 
 export * from "./types";
 
-/** The canonical empty diagram. From-scratch gen is `patch(emptyDiagram(), d)`. */
+/** The canonical empty diagram. */
 export function emptyDiagram(): Diagram {
-	return { version: DIAGRAM_VERSION, nodes: [], edges: [] };
+	return { version: DIAGRAM_VERSION, boxes: [], connectors: [] };
 }
 
-/** Index a diagram's nodes by id for O(1) lookup. */
-export function nodeMap(d: Diagram): Map<string, DiagramNode> {
-	return new Map(d.nodes.map((n) => [n.id, n]));
+/** Index boxes by id for O(1) lookup. */
+export function boxMap(d: Diagram): Map<string, Box> {
+	return new Map(d.boxes.map((b) => [b.id, b]));
 }
 
-/** Index a diagram's edges by id. */
-export function edgeMap(d: Diagram): Map<string, DiagramEdge> {
-	return new Map(d.edges.map((e) => [e.id, e]));
+/** Index connectors by id. */
+export function connectorMap(d: Diagram): Map<string, Connector> {
+	return new Map(d.connectors.map((c) => [c.id, c]));
 }
 
-/** Serialize a diagram to canonical JSON (stable key ordering). */
+/** Serialize a diagram to canonical JSON. */
 export function serialize(d: Diagram): string {
 	return JSON.stringify(d, null, 2);
 }
 
-/**
- * Parse and validate a diagram from JSON. Throws on malformed input so callers
- * can surface a precise error instead of silently corrupting state.
- */
+/** Parse and validate a diagram from JSON. Throws on malformed input. */
 export function parse(json: string): Diagram {
-	const raw = JSON.parse(json) as unknown;
-	return validate(raw);
+	return validate(JSON.parse(json) as unknown);
 }
 
 /** Validate an unknown value as a Diagram, throwing on the first problem. */
@@ -43,27 +39,28 @@ export function validate(raw: unknown): Diagram {
 	const d = raw as Record<string, unknown>;
 	if (d.version !== DIAGRAM_VERSION)
 		throw new Error(`Unsupported diagram version: ${String(d.version)}`);
-	if (!Array.isArray(d.nodes)) throw new Error("Diagram.nodes must be an array");
-	if (!Array.isArray(d.edges)) throw new Error("Diagram.edges must be an array");
+	if (!Array.isArray(d.boxes)) throw new Error("Diagram.boxes must be an array");
+	if (!Array.isArray(d.connectors))
+		throw new Error("Diagram.connectors must be an array");
 
 	const ids = new Set<string>();
-	for (const n of d.nodes as DiagramNode[]) {
-		if (!n.id) throw new Error("Node missing id");
-		if (ids.has(n.id)) throw new Error(`Duplicate node id: ${n.id}`);
-		ids.add(n.id);
-		if (!["component", "screen", "model"].includes(n.kind))
-			throw new Error(`Node ${n.id} has invalid kind: ${n.kind}`);
+	for (const b of d.boxes as Box[]) {
+		if (!b.id) throw new Error("Box missing id");
+		if (ids.has(b.id)) throw new Error(`Duplicate box id: ${b.id}`);
+		ids.add(b.id);
+		if (!Array.isArray(b.fields)) throw new Error(`Box ${b.id} fields must be an array`);
+		if (!Array.isArray(b.comments)) throw new Error(`Box ${b.id} comments must be an array`);
 	}
 
-	const edgeIds = new Set<string>();
-	for (const e of d.edges as DiagramEdge[]) {
-		if (!e.id) throw new Error("Edge missing id");
-		if (edgeIds.has(e.id)) throw new Error(`Duplicate edge id: ${e.id}`);
-		edgeIds.add(e.id);
-		if (!ids.has(e.source))
-			throw new Error(`Edge ${e.id} references missing source: ${e.source}`);
-		if (!ids.has(e.target))
-			throw new Error(`Edge ${e.id} references missing target: ${e.target}`);
+	const cIds = new Set<string>();
+	for (const c of d.connectors as Connector[]) {
+		if (!c.id) throw new Error("Connector missing id");
+		if (cIds.has(c.id)) throw new Error(`Duplicate connector id: ${c.id}`);
+		cIds.add(c.id);
+		if (!ids.has(c.source))
+			throw new Error(`Connector ${c.id} references missing source: ${c.source}`);
+		if (!ids.has(c.target))
+			throw new Error(`Connector ${c.id} references missing target: ${c.target}`);
 	}
 
 	return d as unknown as Diagram;
