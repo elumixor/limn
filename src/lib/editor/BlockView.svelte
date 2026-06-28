@@ -14,6 +14,8 @@
 	} = $props();
 
 	const selected = $derived(editor.isBlockSelected(block.id));
+	const isDragging = $derived(editor.draggingId === block.id);
+	const isDropTarget = $derived(editor.dropTarget === block.id);
 	const editingName = $derived(editor.editing?.id === block.id && editor.editing.part === "name");
 	const showComments = $derived((block.showComments ?? true) && block.comments.length > 0);
 
@@ -49,6 +51,8 @@
 	class="block"
 	class:root
 	class:selected
+	class:dragging={isDragging}
+	class:droptarget={isDropTarget}
 	class:linking={editor.pendingConnector === block.id}
 	data-block-id={block.id}
 	style={root ? `left:${block.x ?? 0}px; top:${block.y ?? 0}px` : ""}
@@ -137,6 +141,10 @@
 			{/each}
 		</div>
 	{/if}
+
+	{#if isDropTarget}
+		<div class="dropslot">drop to nest</div>
+	{/if}
 </div>
 
 <style>
@@ -170,6 +178,24 @@
 	.block.linking {
 		border-color: #6366f1;
 		box-shadow: 0 0 0 2px #6366f1;
+	}
+	.block.dragging {
+		opacity: 0.5;
+	}
+	.block.droptarget {
+		border-color: #6366f1;
+		box-shadow: 0 0 0 2px #6366f1, 0 10px 24px rgb(99 102 241 / 0.22);
+	}
+	.dropslot {
+		margin: 0 9px 9px;
+		padding: 8px;
+		border: 1.5px dashed #6366f1;
+		border-radius: 7px;
+		color: #6366f1;
+		font-size: 11px;
+		font-weight: 500;
+		text-align: center;
+		background: rgb(99 102 241 / 0.07);
 	}
 	.head {
 		display: flex;

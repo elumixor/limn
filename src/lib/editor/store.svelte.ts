@@ -55,6 +55,9 @@ class EditorStore {
 	sizes = $state(new Map<string, { w: number; h: number }>());
 	/** Canvas pan offset (infinite scrolling). */
 	pan = $state({ x: 0, y: 0 });
+	/** Transient drag feedback (not persisted). */
+	draggingId = $state<string | null>(null);
+	dropTarget = $state<string | null>(null);
 
 	// ---- history ------------------------------------------------------------
 	#undo: string[] = [];

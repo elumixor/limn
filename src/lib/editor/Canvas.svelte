@@ -139,6 +139,7 @@
 				const b = editor.block(id);
 				drag.start.set(id, { x: b?.x ?? 0, y: b?.y ?? 0 });
 			}
+			editor.draggingId = drag.id;
 			const ps = toCanvas(e.clientX, e.clientY);
 			drag.px = ps.x;
 			drag.py = ps.y;
@@ -148,6 +149,18 @@
 			const s = drag.start.get(id);
 			if (s) editor.move(id, s.x + (p.x - drag.px), s.y + (p.y - drag.py));
 		}
+		// live drop-target feedback (only single-block drags can nest)
+		editor.dropTarget = drag.group.length === 1 ? dropTargetAt(e.clientX, e.clientY) : null;
+	}
+
+	/** The block under the cursor that the dragged block could nest into. */
+	function dropTargetAt(clientX: number, clientY: number): string | null {
+		if (!drag) return null;
+		const el = document
+			.elementsFromPoint(clientX, clientY)
+			.map((n) => (n as HTMLElement).closest?.("[data-block-id]") as HTMLElement | null)
+			.find((n) => n && n.dataset.blockId && !n.closest(`[data-block-id="${drag!.id}"]`));
+		return (el as HTMLElement | undefined)?.dataset.blockId ?? null;
 	}
 
 	function onWindowPointerUp(e: PointerEvent) {
@@ -168,13 +181,11 @@
 			return;
 		}
 		if (!drag) return;
+		editor.draggingId = null;
+		editor.dropTarget = null;
 		if (drag.moving) {
 			if (drag.group.length === 1) {
-				const dropTarget = document
-					.elementsFromPoint(e.clientX, e.clientY)
-					.map((el) => (el as HTMLElement).closest?.("[data-block-id]") as HTMLElement | null)
-					.find((el) => el && el.dataset.blockId && !el.closest(`[data-block-id="${drag!.id}"]`));
-				const targetId = (dropTarget as HTMLElement | undefined)?.dataset.blockId;
+				const targetId = dropTargetAt(e.clientX, e.clientY);
 				if (targetId && targetId !== drag.id) editor.reparent(drag.id, targetId, 0, 0, { record: false });
 			}
 		} else {
