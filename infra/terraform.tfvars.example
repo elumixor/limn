@@ -1,0 +1,12 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+vercel_api_token = "vca_xxx_or_api_token"
+vercel_org_id    = "your_vercel_user_or_team_id"
+github_token     = "ghp_xxx" # repo + workflow scope
+github_owner     = "elumixor"
+github_repo      = "limn"
+project_name     = "limn"
+
+# App env from .env (none yet):
+# app_env = {
+#   PUBLIC_API_URL = "https://api.example.com"
+# }
