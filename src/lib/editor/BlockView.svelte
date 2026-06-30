@@ -6,11 +6,9 @@
 	let {
 		block,
 		root = false,
-		onconnectorstart,
 	}: {
 		block: Block;
 		root?: boolean;
-		onconnectorstart: (id: string, e: PointerEvent) => void;
 	} = $props();
 
 	const selected = $derived(editor.isBlockSelected(block.id));
@@ -39,11 +37,28 @@
 		const ro = new ResizeObserver(() => editor.measure(block.id, node.offsetWidth, node.offsetHeight));
 		ro.observe(node);
 		editor.measure(block.id, node.offsetWidth, node.offsetHeight);
-		return { destroy: () => ro.disconnect() };
+		return {
+			destroy: () => {
+				ro.disconnect();
+				// Drop the measured size when this root unmounts (deleted, or nested so
+				// it's no longer a root) — otherwise `editor.sizes` grows unbounded.
+				editor.sizes.delete(block.id);
+			},
+		};
 	}
 
 	function isEditingComment(i: number) {
 		return editor.editing?.id === block.id && editor.editing.part === "comment" && editor.editing.index === i;
+	}
+
+	// Every block is absolutely positioned within its container — a root inside the
+	// canvas, a nested block inside its parent's `.children` box. Coordinates are
+	// relative to that container, so the same geometry fields drive both.
+	function boxStyle(b: Block) {
+		let s = `left:${b.x ?? 0}px; top:${b.y ?? 0}px;`;
+		if (b.w) s += `width:${b.w}px;${root ? "max-width:none;" : ""}`;
+		if (b.h) s += `height:${b.h}px;`;
+		return s;
 	}
 </script>
 
@@ -54,8 +69,9 @@
 	class:dragging={isDragging}
 	class:droptarget={isDropTarget}
 	class:linking={editor.pendingConnector === block.id}
+	class:centered={!block.children.length}
 	data-block-id={block.id}
-	style={root ? `left:${block.x ?? 0}px; top:${block.y ?? 0}px` : ""}
+	style={boxStyle(block)}
 	use:measure
 >
 	<div class="head">
@@ -84,18 +100,6 @@
 
 		{#if !showComments && block.comments.length}
 			<span class="badge" title="{block.comments.length} comment(s)">💬{block.comments.length}</span>
-		{/if}
-
-		{#if root}
-			<button
-				class="connect"
-				title="Drag to connect"
-				aria-label="Connect"
-				onpointerdown={(e) => {
-					e.stopPropagation();
-					onconnectorstart(block.id, e);
-				}}
-			></button>
 		{/if}
 	</div>
 
@@ -137,7 +141,7 @@
 	{#if block.children.length}
 		<div class="children">
 			{#each block.children as child (child.id)}
-				<Self block={child} {onconnectorstart} />
+				<Self block={child} />
 			{/each}
 		</div>
 	{/if}
@@ -149,23 +153,30 @@
 
 <style>
 	.block {
+		/* Every block is absolutely positioned within its container (canvas for
+		   roots, the parent's `.children` box for nested blocks). */
+		position: absolute;
+		box-sizing: border-box;
 		background: var(--card, #fff);
 		border: 1px solid var(--border, #e4e4e7);
 		border-radius: 9px;
 		font-size: 13px;
 		display: flex;
 		flex-direction: column;
+		overflow: hidden;
+		cursor: grab;
 	}
 	.block.root {
-		position: absolute;
 		min-width: 170px;
 		max-width: 320px;
 		box-shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 1px 3px rgb(0 0 0 / 0.04);
-		cursor: grab;
+	}
+	/* No children: center the title vertically within the (possibly resized) block. */
+	.block.centered {
+		justify-content: center;
 	}
 	.block:not(.root) {
 		margin: 0;
-		background: var(--muted, #fafafa);
 		font-size: 12px;
 	}
 	.block.selected {
@@ -200,6 +211,7 @@
 	.head {
 		display: flex;
 		align-items: center;
+		justify-content: center;
 		gap: 5px;
 		padding: 7px 9px;
 		position: relative;
@@ -214,6 +226,7 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+		text-align: center;
 	}
 	.block:not(.root) .name,
 	.block:not(.root) .name-input {
@@ -246,25 +259,6 @@
 		border-radius: 4px;
 		padding: 1px 5px;
 		user-select: none;
-	}
-	.connect {
-		width: 13px;
-		height: 13px;
-		border-radius: 50%;
-		border: 2px solid var(--card, #fff);
-		background: var(--muted-fg, #a1a1aa);
-		cursor: crosshair;
-		padding: 0;
-		opacity: 0;
-		transition: opacity 0.1s, background 0.1s;
-		flex-shrink: 0;
-	}
-	.block.root:hover .connect,
-	.block.root.selected .connect {
-		opacity: 1;
-	}
-	.connect:hover {
-		background: #6366f1;
 	}
 	.comments {
 		display: flex;
@@ -321,10 +315,12 @@
 	.del:hover {
 		color: #dc2626 !important;
 	}
+	/* Freeform container: children are absolutely positioned inside it and the box
+	   fills the remaining height of the (sized) parent block. */
 	.children {
-		display: flex;
-		flex-direction: column;
-		gap: 5px;
-		padding: 0 9px 9px 9px;
+		position: relative;
+		flex: 1 1 auto;
+		min-height: 0;
+		margin: 0 6px 6px;
 	}
 </style>

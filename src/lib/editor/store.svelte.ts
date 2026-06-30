@@ -1,4 +1,10 @@
+import { SvelteMap } from "svelte/reactivity";
 import {
+	type Anchor,
+	type Block,
+	type Connector,
+	type ConnectorKind,
+	type Diagram,
 	emptyDiagram,
 	findBlock,
 	isAncestor,
@@ -6,24 +12,53 @@ import {
 	ownerList,
 	serialize,
 	validate,
-	type Block,
-	type Connector,
-	type ConnectorKind,
-	type Diagram,
 } from "../diagram";
+import { History } from "./history";
+import {
+	childrenExtent,
+	DEFAULT_CHILD_H,
+	DEFAULT_CHILD_W,
+	descendantIds,
+	FIT_SLACK,
+	HEADER_ALLOW,
+	MIN_PARENT_H,
+	MIN_PARENT_W,
+	NEST_GAP,
+	NEST_INSET,
+	nextChildY,
+} from "./layout";
 
 const STORAGE_KEY = "limn.diagram.v3";
 
 function uid(prefix: string): string {
-	const rand =
-		typeof crypto !== "undefined" && crypto.randomUUID
-			? crypto.randomUUID().slice(0, 8)
-			: Math.random().toString(36).slice(2, 10);
+	const rand = crypto?.randomUUID ? crypto.randomUUID().slice(0, 8) : Math.random().toString(36).slice(2, 10);
 	return `${prefix}_${rand}`;
 }
 
 function newBlock(name = "Untitled"): Block {
 	return { id: uid("b"), name, comments: [], children: [] };
+}
+
+/** Ensure every nested block has explicit geometry and every parent is big
+ *  enough to contain its children. Runs once on load so legacy diagrams (whose
+ *  children used to flow) render sensibly in the freeform model. */
+function normalizeLayout(d: Diagram) {
+	const visit = (b: Block) => {
+		if (!b.children.length) return;
+		let stackY = NEST_INSET;
+		for (const c of b.children) {
+			c.w ??= DEFAULT_CHILD_W;
+			c.h ??= DEFAULT_CHILD_H;
+			c.x ??= NEST_INSET;
+			c.y ??= stackY;
+			stackY = Math.max(stackY, c.y + c.h + NEST_GAP);
+			visit(c);
+		}
+		const { right, bottom } = childrenExtent(b.children);
+		b.w = Math.max(b.w ?? 0, right + NEST_INSET + FIT_SLACK, MIN_PARENT_W);
+		b.h = Math.max(b.h ?? 0, bottom + HEADER_ALLOW, MIN_PARENT_H);
+	};
+	d.blocks.forEach(visit);
 }
 
 export type Editing =
@@ -37,7 +72,9 @@ function loadInitial(): Diagram {
 	const saved = localStorage.getItem(STORAGE_KEY);
 	if (!saved) return emptyDiagram();
 	try {
-		return validate(JSON.parse(saved));
+		const d = validate(JSON.parse(saved));
+		normalizeLayout(d);
+		return d;
 	} catch {
 		return emptyDiagram();
 	}
@@ -50,9 +87,11 @@ class EditorStore {
 	selectedConnector = $state<string | null>(null);
 	editing = $state<Editing>(null);
 	pendingConnector = $state<string | null>(null);
+	/** Border anchor the pending connector is being drawn from. */
+	pendingAnchor = $state<Anchor | null>(null);
 
 	/** Measured sizes of rendered ROOT blocks (not persisted) — for connector geometry. */
-	sizes = $state(new Map<string, { w: number; h: number }>());
+	sizes = new SvelteMap<string, { w: number; h: number }>();
 	/** Canvas pan offset (infinite scrolling). */
 	pan = $state({ x: 0, y: 0 });
 	/** Transient drag feedback (not persisted). */
@@ -60,25 +99,10 @@ class EditorStore {
 	dropTarget = $state<string | null>(null);
 
 	// ---- history ------------------------------------------------------------
-	#undo: string[] = [];
-	#redo: string[] = [];
-	#coalesceKey = "";
-	#coalesceAt = 0;
+	#history = new History();
 
 	#record(coalesceKey = "") {
-		const now = Date.now();
-		if (coalesceKey && coalesceKey === this.#coalesceKey && now - this.#coalesceAt < 700) {
-			this.#coalesceAt = now;
-			return;
-		}
-		const snap = serialize(this.diagram);
-		if (this.#undo[this.#undo.length - 1] !== snap) {
-			this.#undo.push(snap);
-			if (this.#undo.length > 200) this.#undo.shift();
-		}
-		this.#redo = [];
-		this.#coalesceKey = coalesceKey;
-		this.#coalesceAt = now;
+		this.#history.record(serialize(this.diagram), coalesceKey);
 	}
 
 	snapshot() {
@@ -89,18 +113,16 @@ class EditorStore {
 	}
 
 	undo() {
-		if (!this.#undo.length) return;
-		this.#redo.push(serialize(this.diagram));
-		this.diagram = validate(JSON.parse(this.#undo.pop() as string));
-		this.#coalesceKey = "";
+		const prev = this.#history.undo(serialize(this.diagram));
+		if (prev === null) return;
+		this.diagram = validate(JSON.parse(prev));
 		this.editing = null;
 		this.#prune();
 	}
 	redo() {
-		if (!this.#redo.length) return;
-		this.#undo.push(serialize(this.diagram));
-		this.diagram = validate(JSON.parse(this.#redo.pop() as string));
-		this.#coalesceKey = "";
+		const next = this.#history.redo(serialize(this.diagram));
+		if (next === null) return;
+		this.diagram = validate(JSON.parse(next));
 		this.editing = null;
 		this.#prune();
 	}
@@ -165,11 +187,32 @@ class EditorStore {
 		if (!parent) return;
 		this.#record();
 		const b = newBlock("property");
+		b.w = DEFAULT_CHILD_W;
+		b.h = DEFAULT_CHILD_H;
+		b.x = NEST_INSET;
+		b.y = nextChildY(parent);
 		parent.children.push(b);
 		parent.collapsed = false;
+		this.#fit(parent);
 		this.selectBlock(b.id);
 		this.editing = { id: b.id, part: "name" };
 		return b;
+	}
+
+	/** Parent block of `id` (null for roots). */
+	parentOf(id: string): Block | null {
+		return ownerList(this.diagram, id)?.parent ?? null;
+	}
+
+	/** Grow a block so it contains all its children, then cascade up its ancestry. */
+	#fit(b: Block) {
+		if (b.children.length) {
+			const { right, bottom } = childrenExtent(b.children);
+			b.w = Math.max(b.w ?? 0, right + NEST_INSET + FIT_SLACK, MIN_PARENT_W);
+			b.h = Math.max(b.h ?? 0, bottom + HEADER_ALLOW, MIN_PARENT_H);
+		}
+		const parent = this.parentOf(b.id);
+		if (parent) this.#fit(parent);
 	}
 
 	rename(id: string, name: string) {
@@ -181,19 +224,12 @@ class EditorStore {
 		const owner = ownerList(this.diagram, id);
 		const block = this.block(id);
 		if (!owner || !block) return;
-		const removed = new Set<string>();
-		const collect = (x: Block) => {
-			removed.add(x.id);
-			x.children.forEach(collect);
-		};
-		collect(block);
+		const removed = descendantIds(block);
 		owner.list.splice(
 			owner.list.findIndex((x) => x.id === id),
 			1,
 		);
-		this.diagram.connectors = this.diagram.connectors.filter(
-			(c) => !removed.has(c.source) && !removed.has(c.target),
-		);
+		this.diagram.connectors = this.diagram.connectors.filter((c) => !removed.has(c.source) && !removed.has(c.target));
 		this.selectedBlocks = this.selectedBlocks.filter((s) => !removed.has(s));
 	}
 
@@ -204,9 +240,18 @@ class EditorStore {
 
 	move(id: string, x: number, y: number) {
 		const b = this.block(id);
-		if (b && this.isRoot(id)) {
+		// Coordinates are canvas-space for roots, parent-local for nested blocks.
+		if (b) {
 			b.x = x;
 			b.y = y;
+		}
+	}
+
+	resize(id: string, w: number, h: number) {
+		const b = this.block(id);
+		if (b) {
+			b.w = Math.round(w);
+			b.h = Math.round(h);
 		}
 	}
 
@@ -231,20 +276,19 @@ class EditorStore {
 			block.y = y;
 			this.diagram.blocks.push(block);
 		} else {
-			delete block.x;
-			delete block.y;
 			const parent = this.block(newParentId);
-			parent?.children.push(block);
-			if (parent) parent.collapsed = false;
-			const nested = new Set<string>();
-			const collect = (b: Block) => {
-				nested.add(b.id);
-				b.children.forEach(collect);
-			};
-			collect(block);
-			this.diagram.connectors = this.diagram.connectors.filter(
-				(c) => !nested.has(c.source) && !nested.has(c.target),
-			);
+			if (parent) {
+				// Place inside the new parent (freeform) and size everything to fit.
+				block.w ??= DEFAULT_CHILD_W;
+				block.h ??= DEFAULT_CHILD_H;
+				block.x = NEST_INSET;
+				block.y = nextChildY(parent);
+				parent.children.push(block);
+				parent.collapsed = false;
+				this.#fit(parent);
+			}
+			const nested = descendantIds(block);
+			this.diagram.connectors = this.diagram.connectors.filter((c) => !nested.has(c.source) && !nested.has(c.target));
 		}
 	}
 
@@ -275,29 +319,53 @@ class EditorStore {
 	}
 
 	// ---- connectors ---------------------------------------------------------
-	startConnector(sourceId: string) {
-		if (this.isRoot(sourceId)) this.pendingConnector = sourceId;
+	connector(id: string): Connector | undefined {
+		return this.diagram.connectors.find((c) => c.id === id);
 	}
-	completeConnector(targetId: string): Connector | undefined {
+	startConnector(sourceId: string, anchor: Anchor | null = null) {
+		if (this.isRoot(sourceId)) {
+			this.pendingConnector = sourceId;
+			this.pendingAnchor = anchor;
+		}
+	}
+	completeConnector(targetId: string, targetAnchor: Anchor | null = null): Connector | undefined {
 		const src = this.pendingConnector;
+		const srcAnchor = this.pendingAnchor;
 		this.pendingConnector = null;
+		this.pendingAnchor = null;
 		if (!src || src === targetId || !this.isRoot(targetId)) return;
 		if (this.diagram.connectors.some((c) => c.source === src && c.target === targetId)) return;
 		this.#record();
 		const c: Connector = { id: uid("c"), source: src, target: targetId, kind: "arrow" };
+		if (srcAnchor) c.sourceAnchor = srcAnchor;
+		if (targetAnchor) c.targetAnchor = targetAnchor;
 		this.diagram.connectors.push(c);
 		this.selectConnector(c.id);
 		return c;
 	}
+	/** Move one end of a connector to a (possibly new) block and pin its border anchor. */
+	setConnectorEnd(id: string, end: "source" | "target", blockId: string, anchor: Anchor) {
+		const c = this.connector(id);
+		if (!c || !this.isRoot(blockId)) return;
+		const other = end === "source" ? c.target : c.source;
+		if (blockId === other) return; // can't point a connector at the same block on both ends
+		if (end === "source") {
+			c.source = blockId;
+			c.sourceAnchor = anchor;
+		} else {
+			c.target = blockId;
+			c.targetAnchor = anchor;
+		}
+	}
 	cycleConnectorKind(id: string) {
-		const c = this.diagram.connectors.find((c) => c.id === id);
+		const c = this.connector(id);
 		if (!c) return;
 		this.#record();
 		const order: ConnectorKind[] = ["arrow", "double", "line"];
 		c.kind = order[(order.indexOf(c.kind) + 1) % order.length];
 	}
 	setConnectorDescription(id: string, description: string) {
-		const c = this.diagram.connectors.find((c) => c.id === id);
+		const c = this.connector(id);
 		if (c) c.description = description;
 	}
 	deleteConnector(id: string) {
@@ -338,6 +406,7 @@ class EditorStore {
 		this.clearSelection();
 		this.editing = null;
 		this.pendingConnector = null;
+		this.pendingAnchor = null;
 	}
 
 	// ---- import / export ----------------------------------------------------
@@ -346,10 +415,13 @@ class EditorStore {
 	}
 	loadJSON(json: string) {
 		this.#record();
-		this.diagram = validate(JSON.parse(json));
+		const d = validate(JSON.parse(json));
+		normalizeLayout(d);
+		this.diagram = d;
 		this.clearSelection();
 		this.editing = null;
 		this.pendingConnector = null;
+		this.pendingAnchor = null;
 	}
 
 	measure(id: string, w: number, h: number) {

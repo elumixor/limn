@@ -1,4 +1,4 @@
-import { DIAGRAM_VERSION, type Block, type Connector, type Diagram } from "./types";
+import { type Block, type Connector, DIAGRAM_VERSION, type Diagram } from "./types";
 
 export * from "./types";
 

@@ -1,294 +1,57 @@
 <script lang="ts">
-	import type { Connector } from "../diagram";
 	import { editor } from "./store.svelte";
 	import BlockView from "./BlockView.svelte";
-	import ContextMenu, { type MenuItem } from "./ContextMenu.svelte";
+	import ContextMenu from "./ContextMenu.svelte";
+	import { CanvasController } from "./canvas-controller.svelte";
+	import { anchorDir, anchorPoint, CARDINALS, curve, curveMid, handlePoint, pickCardinal, resizeCursor, resizeZones } from "./geometry";
 
 	let viewport: HTMLDivElement | undefined = $state();
-	let linking = $state<{ x: number; y: number } | null>(null);
-	let menu = $state<{ x: number; y: number; items: MenuItem[] } | null>(null);
-	let marquee = $state<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+	const ctl = new CanvasController(() => viewport);
 
-	const THRESHOLD = 4;
-	type Drag = {
-		id: string;
-		targetEl: Element | null;
-		sx: number;
-		sy: number;
-		moving: boolean;
-		group: string[];
-		start: Map<string, { x: number; y: number }>;
-		px: number;
-		py: number;
-	};
-	let drag: Drag | null = null;
-	let panning = $state<{ sx: number; sy: number; px: number; py: number } | null>(null);
-
-	function vrect() {
-		return viewport?.getBoundingClientRect();
-	}
-	function toCanvas(clientX: number, clientY: number) {
-		const r = vrect();
-		return { x: clientX - (r?.left ?? 0) - editor.pan.x, y: clientY - (r?.top ?? 0) - editor.pan.y };
+	function autofocusBtn(node: HTMLButtonElement) {
+		requestAnimationFrame(() => node.focus());
 	}
 
-	function rect(id: string) {
-		const b = editor.block(id);
-		const s = editor.sizes.get(id) ?? { w: 180, h: 56 };
-		return { x: b?.x ?? 0, y: b?.y ?? 0, w: s.w, h: s.h };
-	}
-	function border(r: { x: number; y: number; w: number; h: number }, t: { x: number; y: number }) {
-		const cx = r.x + r.w / 2;
-		const cy = r.y + r.h / 2;
-		const dx = t.x - cx;
-		const dy = t.y - cy;
-		if (!dx && !dy) return { x: cx, y: cy };
-		const sx = dx ? r.w / 2 / Math.abs(dx) : Infinity;
-		const sy = dy ? r.h / 2 / Math.abs(dy) : Infinity;
-		const s = Math.min(sx, sy);
-		return { x: cx + dx * s, y: cy + dy * s };
-	}
-	function geometry(c: Connector) {
-		const a = rect(c.source);
-		const b = rect(c.target);
-		const ca = { x: a.x + a.w / 2, y: a.y + a.h / 2 };
-		const cb = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
-		return { p1: border(a, cb), p2: border(b, ca) };
-	}
-
-	function isEditingField(t: EventTarget | null) {
-		return !!(t as HTMLElement)?.closest("input, textarea");
-	}
-	function blockIdAt(node: EventTarget | null): string | null {
-		return ((node as HTMLElement)?.closest("[data-block-id]") as HTMLElement)?.dataset.blockId ?? null;
-	}
-
-	// ---- pan ----------------------------------------------------------------
-	function onWheel(e: WheelEvent) {
-		e.preventDefault();
-		editor.pan = { x: editor.pan.x - e.deltaX, y: editor.pan.y - e.deltaY };
-	}
-
-	// ---- pointer ------------------------------------------------------------
-	function onPointerDown(e: PointerEvent) {
-		if (e.button === 1 || (e.button === 0 && e.altKey)) {
-			e.preventDefault();
-			panning = { sx: e.clientX, sy: e.clientY, px: editor.pan.x, py: editor.pan.y };
-			return;
-		}
-		if (e.button !== 0) return;
-		if (editor.pendingConnector) return;
-		if (isEditingField(e.target)) return;
-
-		const id = blockIdAt(e.target);
-		if (!id) {
-			// start marquee selection on empty canvas
-			if (!e.shiftKey) editor.clearSelection();
-			editor.editing = null;
-			const r = vrect();
-			const x = e.clientX - (r?.left ?? 0);
-			const y = e.clientY - (r?.top ?? 0);
-			marquee = { x0: x, y0: y, x1: x, y1: y };
-			return;
-		}
-		drag = {
-			id,
-			targetEl: e.target as Element,
-			sx: e.clientX,
-			sy: e.clientY,
-			moving: false,
-			group: [],
-			start: new Map(),
-			px: 0,
-			py: 0,
+	/** Focus (and select) the connector label input when it enters edit mode. */
+	function focusWhenEditing(node: HTMLInputElement, editing: boolean) {
+		let raf = 0;
+		let was = false;
+		const focus = () => {
+			cancelAnimationFrame(raf);
+			raf = requestAnimationFrame(() => {
+				node.focus();
+				node.select();
+			});
 		};
-	}
-
-	function onWindowPointerMove(e: PointerEvent) {
-		if (panning) {
-			editor.pan = { x: panning.px + (e.clientX - panning.sx), y: panning.py + (e.clientY - panning.sy) };
-			return;
+		if (editing) {
+			was = true;
+			focus();
 		}
-		if (editor.pendingConnector) {
-			linking = toCanvas(e.clientX, e.clientY);
-			return;
-		}
-		if (marquee) {
-			const r = vrect();
-			marquee = { ...marquee, x1: e.clientX - (r?.left ?? 0), y1: e.clientY - (r?.top ?? 0) };
-			return;
-		}
-		if (!drag) return;
-		if (!drag.moving) {
-			if (Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < THRESHOLD) return;
-			drag.moving = true;
-			editor.snapshot();
-			if (!editor.isRoot(drag.id)) {
-				const el = viewport?.querySelector(`[data-block-id="${drag.id}"]`) as HTMLElement | null;
-				const r = el?.getBoundingClientRect();
-				const p = toCanvas(r?.left ?? e.clientX, r?.top ?? e.clientY);
-				editor.reparent(drag.id, null, p.x, p.y, { record: false });
-				drag.group = [drag.id];
-			} else if (editor.isBlockSelected(drag.id) && editor.selectedBlocks.length > 1) {
-				drag.group = editor.selectedBlocks.filter((id) => editor.isRoot(id));
-			} else {
-				editor.selectBlock(drag.id);
-				drag.group = [drag.id];
-			}
-			for (const id of drag.group) {
-				const b = editor.block(id);
-				drag.start.set(id, { x: b?.x ?? 0, y: b?.y ?? 0 });
-			}
-			editor.draggingId = drag.id;
-			const ps = toCanvas(e.clientX, e.clientY);
-			drag.px = ps.x;
-			drag.py = ps.y;
-		}
-		const p = toCanvas(e.clientX, e.clientY);
-		for (const id of drag.group) {
-			const s = drag.start.get(id);
-			if (s) editor.move(id, s.x + (p.x - drag.px), s.y + (p.y - drag.py));
-		}
-		// live drop-target feedback (only single-block drags can nest)
-		editor.dropTarget = drag.group.length === 1 ? dropTargetAt(e.clientX, e.clientY) : null;
-	}
-
-	/** The block under the cursor that the dragged block could nest into. */
-	function dropTargetAt(clientX: number, clientY: number): string | null {
-		if (!drag) return null;
-		const el = document
-			.elementsFromPoint(clientX, clientY)
-			.map((n) => (n as HTMLElement).closest?.("[data-block-id]") as HTMLElement | null)
-			.find((n) => n && n.dataset.blockId && !n.closest(`[data-block-id="${drag!.id}"]`));
-		return (el as HTMLElement | undefined)?.dataset.blockId ?? null;
-	}
-
-	function onWindowPointerUp(e: PointerEvent) {
-		if (panning) {
-			panning = null;
-			return;
-		}
-		if (editor.pendingConnector) {
-			const target = blockIdAt(document.elementFromPoint(e.clientX, e.clientY));
-			if (target) editor.completeConnector(target);
-			else editor.pendingConnector = null;
-			linking = null;
-			return;
-		}
-		if (marquee) {
-			finishMarquee(e.shiftKey);
-			marquee = null;
-			return;
-		}
-		if (!drag) return;
-		editor.draggingId = null;
-		editor.dropTarget = null;
-		if (drag.moving) {
-			if (drag.group.length === 1) {
-				const targetId = dropTargetAt(e.clientX, e.clientY);
-				if (targetId && targetId !== drag.id) editor.reparent(drag.id, targetId, 0, 0, { record: false });
-			}
-		} else {
-			editor.selectBlock(drag.id);
-			const editEl = (drag.targetEl as HTMLElement | null)?.closest("[data-edit]");
-			if (editEl) {
-				const part = editEl.getAttribute("data-edit");
-				if (part === "name") editor.editing = { id: drag.id, part: "name" };
-				else editor.editing = { id: drag.id, part: "comment", index: Number(editEl.getAttribute("data-ci")) };
-			} else {
-				editor.editing = null;
-			}
-		}
-		drag = null;
-	}
-
-	function finishMarquee(additive: boolean) {
-		if (!marquee) return;
-		const r = vrect();
-		// marquee rect in canvas (content) coords
-		const x0 = Math.min(marquee.x0, marquee.x1) - editor.pan.x;
-		const y0 = Math.min(marquee.y0, marquee.y1) - editor.pan.y;
-		const x1 = Math.max(marquee.x0, marquee.x1) - editor.pan.x;
-		const y1 = Math.max(marquee.y0, marquee.y1) - editor.pan.y;
-		if (Math.abs(x1 - x0) < 3 && Math.abs(y1 - y0) < 3) return; // a click, not a marquee
-		void r;
-		const hits = editor.diagram.blocks
-			.filter((b) => {
-				const s = editor.sizes.get(b.id) ?? { w: 180, h: 56 };
-				const bx = b.x ?? 0;
-				const by = b.y ?? 0;
-				return bx < x1 && bx + s.w > x0 && by < y1 && by + s.h > y0;
-			})
-			.map((b) => b.id);
-		const next = additive ? [...new Set([...editor.selectedBlocks, ...hits])] : hits;
-		editor.selectBlocks(next);
-	}
-
-	function onConnectorStart(id: string, e: PointerEvent) {
-		editor.startConnector(id);
-		linking = toCanvas(e.clientX, e.clientY);
-	}
-
-	// ---- context menus ------------------------------------------------------
-	function onContextMenu(e: MouseEvent) {
-		const id = blockIdAt(e.target);
-		e.preventDefault();
-		if (id) {
-			if (!editor.isBlockSelected(id)) editor.selectBlock(id);
-			const nested = !editor.isRoot(id);
-			const items: MenuItem[] = [
-				{ label: "Add subblock", hint: "F", action: () => editor.addChild(id) },
-				{ label: "Add comment", hint: "A", action: () => editor.addComment(id) },
-			];
-			if (!nested) items.push({ label: "Connect from here", hint: "C", action: () => editor.startConnector(id) });
-			if (nested) {
-				const r = (e.target as HTMLElement).closest("[data-block-id]")?.getBoundingClientRect();
-				const p = toCanvas(r?.left ?? e.clientX, r?.top ?? e.clientY);
-				items.push({ label: "Move to canvas", action: () => editor.reparent(id, null, p.x, p.y) });
-			}
-			items.push({ label: "Delete", hint: "⌫", danger: true, action: () => editor.deleteSelected() });
-			menu = { x: e.clientX, y: e.clientY, items };
-		} else {
-			const p = toCanvas(e.clientX, e.clientY);
-			menu = {
-				x: e.clientX,
-				y: e.clientY,
-				items: [
-					{ label: "New box", hint: "N", action: () => editor.addRootBlock(p.x - 85, p.y - 20) },
-					{ label: "Reset view", action: () => (editor.pan = { x: 0, y: 0 }) },
-					{ label: "Clear all", danger: true, action: () => editor.clear() },
-				],
-			};
-		}
-	}
-
-	function onConnectorContextMenu(id: string, e: MouseEvent) {
-		e.preventDefault();
-		e.stopPropagation();
-		editor.selectConnector(id);
-		menu = {
-			x: e.clientX,
-			y: e.clientY,
-			items: [
-				{ label: "Cycle arrow style", action: () => editor.cycleConnectorKind(id) },
-				{ label: "Edit description", action: () => (editor.editing = { id, part: "connector" }) },
-				{ label: "Delete connector", hint: "⌫", danger: true, action: () => editor.deleteConnector(id) },
-			],
+		return {
+			update(next: boolean) {
+				if (next && !was) focus(); // only on the false→true transition
+				else if (!next) cancelAnimationFrame(raf); // entering blur: don't re-grab focus
+				was = next;
+			},
+			destroy() {
+				cancelAnimationFrame(raf);
+			},
 		};
 	}
 </script>
 
-<svelte:window onpointermove={onWindowPointerMove} onpointerup={onWindowPointerUp} />
+<svelte:window onpointermove={ctl.onWindowPointerMove} onpointerup={ctl.onWindowPointerUp} />
 
 <div
 	bind:this={viewport}
 	class="viewport"
-	class:panning={!!panning}
+	class:panning={!!ctl.panning}
 	role="application"
 	tabindex="-1"
-	onpointerdown={onPointerDown}
-	oncontextmenu={onContextMenu}
-	onwheel={onWheel}
+	onpointerdown={ctl.onPointerDown}
+	ondblclick={ctl.onDoubleClick}
+	oncontextmenu={ctl.onContextMenu}
+	onwheel={ctl.onWheel}
 >
 	<div class="content" style="transform: translate({editor.pan.x}px, {editor.pan.y}px)">
 		<svg class="edges">
@@ -301,46 +64,64 @@
 				</marker>
 			</defs>
 			{#each editor.diagram.connectors as c (c.id)}
-				{@const g = geometry(c)}
+				{@const g = ctl.geo(c)}
+				{@const d = curve(g)}
 				{@const sel = editor.selectedConnector === c.id}
 				{@const col = sel ? "#6366f1" : "#a1a1aa"}
 				<path
 					class="edge-hit"
-					d="M {g.p1.x} {g.p1.y} L {g.p2.x} {g.p2.y}"
-					onpointerdown={() => editor.selectConnector(c.id)}
-					oncontextmenu={(e) => onConnectorContextMenu(c.id, e)}
+					{d}
+					onpointerdown={(e) => {
+						e.stopPropagation();
+						editor.selectConnector(c.id);
+					}}
+					ondblclick={(e) => {
+						e.stopPropagation();
+						editor.selectConnector(c.id);
+						editor.editing = { id: c.id, part: "connector" };
+					}}
+					oncontextmenu={(e) => ctl.onConnectorContextMenu(c.id, e)}
 					role="button"
 					tabindex="-1"
 				/>
 				<path
-					d="M {g.p1.x} {g.p1.y} L {g.p2.x} {g.p2.y}"
+					{d}
 					stroke={col}
 					stroke-width={sel ? 2.5 : 1.5}
 					fill="none"
-					marker-end={c.kind !== "line" ? `url(#${sel ? "ah-sel" : "ah"})` : undefined}
-					marker-start={c.kind === "double" ? `url(#${sel ? "ah-sel" : "ah"})` : undefined}
 				/>
 			{/each}
-			{#if linking && editor.pendingConnector}
-				{@const a = rect(editor.pendingConnector)}
-				{@const p1 = border(a, linking)}
-				<path d="M {p1.x} {p1.y} L {linking.x} {linking.y}" stroke="#6366f1" stroke-width="1.5" stroke-dasharray="4 4" fill="none" />
+			{#if ctl.linking && editor.pendingConnector}
+				{@const a = ctl.rect(editor.pendingConnector)}
+				{@const sa = editor.pendingAnchor ?? pickCardinal(a, ctl.linking)}
+				{@const p1 = anchorPoint(a, sa)}
+				{@const dl = curve({ p1, p2: ctl.linking, d1: anchorDir(sa), d2: { x: 0, y: 0 } })}
+				<path d={dl} stroke="#6366f1" stroke-width="1.5" stroke-dasharray="4 4" fill="none" />
 			{/if}
 		</svg>
 
 		{#each editor.diagram.connectors as c (c.id)}
-			{@const g = geometry(c)}
-			{@const mx = (g.p1.x + g.p2.x) / 2}
-			{@const my = (g.p1.y + g.p2.y) / 2}
+			{@const m = curveMid(ctl.geo(c))}
+			{@const mx = m.x}
+			{@const my = m.y}
 			{@const sel = editor.selectedConnector === c.id}
-			{#if c.description || (editor.editing?.id === c.id && editor.editing.part === "connector") || sel}
+			{#if c.description || (editor.editing?.id === c.id && editor.editing.part === "connector")}
 				<input
 					class="conn-desc"
 					class:sel
 					style="left:{mx}px; top:{my}px"
 					value={c.description ?? ""}
 					placeholder="describe…"
-					oncontextmenu={(e) => onConnectorContextMenu(c.id, e)}
+					use:focusWhenEditing={editor.editing?.id === c.id && editor.editing.part === "connector"}
+					onpointerdown={(e) => e.stopPropagation()}
+					oncontextmenu={(e) => ctl.onConnectorContextMenu(c.id, e)}
+					onkeydown={(e) => {
+						if (e.key === "Enter" || e.key === "Escape") {
+							e.preventDefault();
+							e.currentTarget.blur();
+							editor.editing = null;
+						}
+					}}
 					onfocus={() => {
 						editor.selectConnector(c.id);
 						editor.beginTextEdit(`cd:${c.id}`);
@@ -351,16 +132,106 @@
 		{/each}
 
 		{#each editor.diagram.blocks as block (block.id)}
-			<BlockView {block} root onconnectorstart={onConnectorStart} />
+			<BlockView {block} root />
 		{/each}
+
+		<!-- Arrowheads drawn on top of blocks (the lines themselves stay behind) -->
+		<svg class="edges edges-top">
+			{#each editor.diagram.connectors as c (c.id)}
+				{@const d = curve(ctl.geo(c))}
+				{@const sel = editor.selectedConnector === c.id}
+				{#if c.kind !== "line"}
+					<path
+						{d}
+						stroke="transparent"
+						fill="none"
+						marker-end={`url(#${sel ? "ah-sel" : "ah"})`}
+						marker-start={c.kind === "double" ? `url(#${sel ? "ah-sel" : "ah"})` : undefined}
+					/>
+				{/if}
+			{/each}
+		</svg>
+
+		<!-- Draggable endpoints of the selected connector -->
+		{#if editor.selectedConnector}
+			{@const c = editor.connector(editor.selectedConnector)}
+			{#if c}
+				{@const g = ctl.geo(c)}
+				<div
+					class="endpoint"
+					class:active={ctl.endDrag?.id === c.id && ctl.endDrag?.end === "source"}
+					style="left:{g.p1.x}px; top:{g.p1.y}px"
+					role="button"
+					tabindex="-1"
+					aria-label="Connector start"
+					onpointerdown={(e) => ctl.onEndpointDown(c.id, "source", e)}
+				></div>
+				<div
+					class="endpoint"
+					class:active={ctl.endDrag?.id === c.id && ctl.endDrag?.end === "target"}
+					style="left:{g.p2.x}px; top:{g.p2.y}px"
+					role="button"
+					tabindex="-1"
+					aria-label="Connector end"
+					onpointerdown={(e) => ctl.onEndpointDown(c.id, "target", e)}
+				></div>
+			{/if}
+		{/if}
+
+		<!-- Invisible resize zones along the hovered block's edges & corners -->
+		{#if ctl.hover && !ctl.endDrag && !editor.pendingConnector && !ctl.drag && !ctl.resizing}
+			{@const rid = ctl.hover.id}
+			{#each resizeZones(ctl.canvasRect(rid)) as z (z.dir)}
+				<div
+					class="resize-zone"
+					style="left:{z.left}px; top:{z.top}px; width:{z.width}px; height:{z.height}px; cursor:{resizeCursor(z.dir)}"
+					role="button"
+					tabindex="-1"
+					aria-label="Resize block"
+					onpointerdown={(e) => ctl.onResizeDown(e, rid, z.dir)}
+				></div>
+			{/each}
+		{/if}
+
+		<!-- The 4 cardinal connection handles, shown while hovering a root block -->
+		{#if ctl.hover && editor.isRoot(ctl.hover.id) && !ctl.endDrag && !editor.pendingConnector && !ctl.drag && !ctl.resizing}
+			{@const hid = ctl.hover.id}
+			{@const hr = ctl.rect(hid)}
+			{#each CARDINALS as c (c.key)}
+				{@const p = handlePoint(hr, c)}
+				<div
+					class="spawn"
+					style="left:{p.x}px; top:{p.y}px"
+					role="button"
+					tabindex="-1"
+					aria-label="Drag to connect"
+					title="Drag to connect"
+					onpointerdown={(e) => ctl.onHandleDown(e, hid, c.anchor)}
+				></div>
+			{/each}
+		{/if}
+
+		<!-- In-place "create a block here" prompt after dropping on empty space -->
+		{#if ctl.addPrompt}
+			<button
+				class="add-prompt"
+				style="left:{ctl.addPrompt.x}px; top:{ctl.addPrompt.y}px"
+				title="Create a block here"
+				use:autofocusBtn
+				onclick={ctl.confirmAddPrompt}
+				onpointerleave={ctl.cancelAddPrompt}
+				onblur={ctl.cancelAddPrompt}
+				onkeydown={(e) => e.key === "Escape" && ctl.cancelAddPrompt()}
+			>+ New block</button>
+		{/if}
 	</div>
 
-	{#if marquee}
+	{#if ctl.marquee}
 		<div
 			class="marquee"
-			style="left:{Math.min(marquee.x0, marquee.x1)}px; top:{Math.min(marquee.y0, marquee.y1)}px; width:{Math.abs(
-				marquee.x1 - marquee.x0,
-			)}px; height:{Math.abs(marquee.y1 - marquee.y0)}px"
+			style="left:{Math.min(ctl.marquee.x0, ctl.marquee.x1)}px; top:{Math.min(ctl.marquee.y0, ctl.marquee.y1)}px; width:{Math.abs(
+				ctl.marquee.x1 - ctl.marquee.x0,
+			)}px; height:{Math.abs(ctl.marquee.y1 - ctl.marquee.y0)}px"
 		></div>
 	{/if}
 
@@ -369,8 +240,8 @@
 	{/if}
 </div>
 
-{#if menu}
-	<ContextMenu x={menu.x} y={menu.y} items={menu.items} onclose={() => (menu = null)} />
+{#if ctl.menu}
+	<ContextMenu x={ctl.menu.x} y={ctl.menu.y} items={ctl.menu.items} onclose={ctl.closeMenu} />
 {/if}
 
 <style>
@@ -410,6 +281,7 @@
 		fill: none;
 		pointer-events: stroke;
 		cursor: pointer;
+		outline: none;
 	}
 	.conn-desc {
 		position: absolute;
@@ -428,6 +300,63 @@
 	.conn-desc:focus,
 	.conn-desc.sel {
 		border-color: #6366f1;
+	}
+	.spawn {
+		position: absolute;
+		width: 12px;
+		height: 12px;
+		transform: translate(-50%, -50%);
+		border-radius: 50%;
+		background: #6366f1;
+		border: 2px solid var(--card, #fff);
+		box-shadow: 0 1px 3px rgb(0 0 0 / 0.2);
+		cursor: crosshair;
+		outline: none;
+		z-index: 5;
+	}
+	.resize-zone {
+		position: absolute;
+		background: transparent;
+		outline: none;
+		z-index: 6;
+	}
+	.endpoint {
+		position: absolute;
+		width: 11px;
+		height: 11px;
+		transform: translate(-50%, -50%);
+		border-radius: 50%;
+		background: var(--card, #fff);
+		border: 2px solid #6366f1;
+		box-shadow: 0 1px 3px rgb(0 0 0 / 0.2);
+		cursor: grab;
+		outline: none;
+		z-index: 6;
+	}
+	.endpoint:hover,
+	.endpoint.active {
+		background: #6366f1;
+		cursor: grabbing;
+	}
+	.add-prompt {
+		position: absolute;
+		transform: translate(-50%, -50%);
+		white-space: nowrap;
+		font: inherit;
+		font-size: 12px;
+		font-weight: 500;
+		padding: 5px 10px;
+		border-radius: 7px;
+		border: 1px solid #6366f1;
+		background: var(--card, #fff);
+		color: #6366f1;
+		cursor: pointer;
+		box-shadow: 0 2px 8px rgb(0 0 0 / 0.12);
+		z-index: 7;
+	}
+	.add-prompt:hover {
+		background: #6366f1;
+		color: #fff;
 	}
 	.marquee {
 		position: absolute;

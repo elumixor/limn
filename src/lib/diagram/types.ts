@@ -29,10 +29,23 @@ export interface Block {
 	/** Canvas position — only meaningful for root blocks. */
 	x?: number;
 	y?: number;
+	/** Explicit size set by resizing — applies to root and nested blocks alike. */
+	w?: number;
+	h?: number;
 }
 
 /** Arrowhead style of a connector. */
 export type ConnectorKind = "line" | "arrow" | "double";
+
+/**
+ * A point fixed to a block's border, stored as a fraction of the block rect
+ * (0..1 on each axis). It always lies on the border, so at least one of x/y is
+ * 0 or 1. Following the block as it moves/resizes is automatic.
+ */
+export interface Anchor {
+	x: number;
+	y: number;
+}
 
 /** A relationship between two root blocks. */
 export interface Connector {
@@ -42,6 +55,10 @@ export interface Connector {
 	kind: ConnectorKind;
 	/** Optional free-text description. When absent the relation reads as "source → target". */
 	description?: string;
+	/** Pinned border point on the source block. When absent it auto-tracks the target. */
+	sourceAnchor?: Anchor;
+	/** Pinned border point on the target block. When absent it auto-tracks the source. */
+	targetAnchor?: Anchor;
 }
 
 export interface Diagram {
