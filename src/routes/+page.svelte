@@ -1,14 +1,10 @@
 <script lang="ts">
+	import { isTextInput } from "$lib/editor/dom";
 	import { editor } from "$lib/editor/store.svelte";
 	import Canvas from "$lib/editor/Canvas.svelte";
 
 	let fileInput: HTMLInputElement;
 	let mouse = { x: 0, y: 0 };
-
-	function isTyping(t: EventTarget | null): boolean {
-		const el = t as HTMLElement | null;
-		return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
-	}
 
 	function addBoxAtMouse() {
 		const el = document.querySelector(".viewport") as HTMLElement | null;
@@ -17,9 +13,7 @@
 		const cx = over ? mouse.x : (r?.left ?? 0) + 200;
 		const cy = over ? mouse.y : (r?.top ?? 0) + 160;
 		// convert screen → content coords (account for pan)
-		const x = cx - (r?.left ?? 0) - editor.pan.x - 85;
-		const y = cy - (r?.top ?? 0) - editor.pan.y - 20;
-		editor.addRootBlock(x, y);
+		editor.addRootBlockCentered(cx - (r?.left ?? 0) - editor.pan.x, cy - (r?.top ?? 0) - editor.pan.y);
 	}
 
 	function onKeydown(e: KeyboardEvent) {
@@ -36,8 +30,7 @@
 			return;
 		}
 
-		const typing = isTyping(e.target);
-		if (typing || mod) return;
+		if (isTextInput(e.target) || mod) return;
 
 		if (e.key === "Delete" || e.key === "Backspace") {
 			e.preventDefault();

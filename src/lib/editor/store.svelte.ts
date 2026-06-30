@@ -15,20 +15,19 @@ import {
 } from "../diagram";
 import { History } from "./history";
 import {
-	childrenExtent,
 	DEFAULT_CHILD_H,
 	DEFAULT_CHILD_W,
 	descendantIds,
-	FIT_SLACK,
-	HEADER_ALLOW,
-	MIN_PARENT_H,
-	MIN_PARENT_W,
+	fitToChildren,
 	NEST_GAP,
 	NEST_INSET,
 	nextChildY,
 } from "./layout";
 
 const STORAGE_KEY = "limn.diagram.v3";
+
+/** Offset from a click point to a new block's top-left, so the box lands centred under the cursor. */
+const NEW_BLOCK_OFFSET = { x: 85, y: 20 } as const;
 
 function uid(prefix: string): string {
 	const rand = crypto?.randomUUID ? crypto.randomUUID().slice(0, 8) : Math.random().toString(36).slice(2, 10);
@@ -54,9 +53,7 @@ function normalizeLayout(d: Diagram) {
 			stackY = Math.max(stackY, c.y + c.h + NEST_GAP);
 			visit(c);
 		}
-		const { right, bottom } = childrenExtent(b.children);
-		b.w = Math.max(b.w ?? 0, right + NEST_INSET + FIT_SLACK, MIN_PARENT_W);
-		b.h = Math.max(b.h ?? 0, bottom + HEADER_ALLOW, MIN_PARENT_H);
+		fitToChildren(b);
 	};
 	d.blocks.forEach(visit);
 }
@@ -136,10 +133,6 @@ class EditorStore {
 		this.selectedBlocks = ids;
 		this.selectedConnector = null;
 	}
-	addToSelection(id: string) {
-		if (!this.selectedBlocks.includes(id)) this.selectedBlocks = [...this.selectedBlocks, id];
-		this.selectedConnector = null;
-	}
 	selectConnector(id: string) {
 		this.selectedConnector = id;
 		this.selectedBlocks = [];
@@ -182,6 +175,11 @@ class EditorStore {
 		return b;
 	}
 
+	/** Add a root block centred (roughly) on a canvas point — used by the "new box" affordances. */
+	addRootBlockCentered(cx: number, cy: number): Block {
+		return this.addRootBlock(cx - NEW_BLOCK_OFFSET.x, cy - NEW_BLOCK_OFFSET.y);
+	}
+
 	addChild(parentId: string): Block | undefined {
 		const parent = this.block(parentId);
 		if (!parent) return;
@@ -192,7 +190,6 @@ class EditorStore {
 		b.x = NEST_INSET;
 		b.y = nextChildY(parent);
 		parent.children.push(b);
-		parent.collapsed = false;
 		this.#fit(parent);
 		this.selectBlock(b.id);
 		this.editing = { id: b.id, part: "name" };
@@ -206,11 +203,7 @@ class EditorStore {
 
 	/** Grow a block so it contains all its children, then cascade up its ancestry. */
 	#fit(b: Block) {
-		if (b.children.length) {
-			const { right, bottom } = childrenExtent(b.children);
-			b.w = Math.max(b.w ?? 0, right + NEST_INSET + FIT_SLACK, MIN_PARENT_W);
-			b.h = Math.max(b.h ?? 0, bottom + HEADER_ALLOW, MIN_PARENT_H);
-		}
+		fitToChildren(b);
 		const parent = this.parentOf(b.id);
 		if (parent) this.#fit(parent);
 	}
@@ -284,17 +277,11 @@ class EditorStore {
 				block.x = NEST_INSET;
 				block.y = nextChildY(parent);
 				parent.children.push(block);
-				parent.collapsed = false;
 				this.#fit(parent);
 			}
 			const nested = descendantIds(block);
 			this.diagram.connectors = this.diagram.connectors.filter((c) => !nested.has(c.source) && !nested.has(c.target));
 		}
-	}
-
-	toggleCollapsed(id: string) {
-		const b = this.block(id);
-		if (b) b.collapsed = !b.collapsed;
 	}
 
 	// ---- comments -----------------------------------------------------------

@@ -7,6 +7,7 @@
  */
 import type { Anchor, Connector } from "../diagram";
 import type { MenuItem } from "./ContextMenu.svelte";
+import { blockIdAt, isTextInput } from "./dom";
 import { connectorGeo, type Geo, nearestCardinal, type Rect } from "./geometry";
 import { childrenExtent, DEFAULT_ROOT_SIZE, NEST_INSET } from "./layout";
 import { editor } from "./store.svelte";
@@ -36,13 +37,6 @@ type Drag = {
 	px: number;
 	py: number;
 };
-
-function isEditingField(t: EventTarget | null) {
-	return !!(t as HTMLElement)?.closest("input, textarea");
-}
-function blockIdAt(node: EventTarget | null): string | null {
-	return ((node as HTMLElement)?.closest("[data-block-id]") as HTMLElement)?.dataset.blockId ?? null;
-}
 
 export class CanvasController {
 	linking = $state<{ x: number; y: number } | null>(null);
@@ -153,7 +147,7 @@ export class CanvasController {
 		}
 		if (e.button !== 0) return;
 		if (editor.pendingConnector) return;
-		if (isEditingField(e.target)) return;
+		if (isTextInput(e.target)) return;
 
 		const id = blockIdAt(e.target);
 		if (!id) {
@@ -508,7 +502,7 @@ export class CanvasController {
 		const p = this.addPrompt;
 		this.addPrompt = null;
 		this.linking = null;
-		const b = editor.addRootBlock(p.x - 85, p.y - 20);
+		const b = editor.addRootBlockCentered(p.x, p.y);
 		editor.completeConnector(b.id);
 		editor.selectBlock(b.id);
 		editor.editing = { id: b.id, part: "name" };
@@ -557,7 +551,7 @@ export class CanvasController {
 				x: e.clientX,
 				y: e.clientY,
 				items: [
-					{ label: "New box", hint: "N", action: () => editor.addRootBlock(p.x - 85, p.y - 20) },
+					{ label: "New box", hint: "N", action: () => editor.addRootBlockCentered(p.x, p.y) },
 					{
 						label: "Reset view",
 						action: () => {

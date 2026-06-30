@@ -31,6 +31,14 @@ export function childrenExtent(children: Block[]): { right: number; bottom: numb
 	return { right, bottom };
 }
 
+/** Grow a block's size so it fully contains its direct children (never shrinks). */
+export function fitToChildren(b: Block): void {
+	if (!b.children.length) return;
+	const { right, bottom } = childrenExtent(b.children);
+	b.w = Math.max(b.w ?? 0, right + NEST_INSET + FIT_SLACK, MIN_PARENT_W);
+	b.h = Math.max(b.h ?? 0, bottom + HEADER_ALLOW, MIN_PARENT_H);
+}
+
 /** The y a newly added child should stack at, below existing siblings. */
 export function nextChildY(parent: Block): number {
 	let y = NEST_INSET;

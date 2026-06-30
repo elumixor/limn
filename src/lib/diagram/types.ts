@@ -24,8 +24,6 @@ export interface Block {
 	children: Block[];
 	/** Show comments inline in the block view (default true once a comment exists). */
 	showComments?: boolean;
-	/** Hide children in the block view. */
-	collapsed?: boolean;
 	/** Canvas position — only meaningful for root blocks. */
 	x?: number;
 	y?: number;
