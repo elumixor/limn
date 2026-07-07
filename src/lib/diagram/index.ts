@@ -1,4 +1,4 @@
-import { type Block, type Connector, DIAGRAM_VERSION, type Diagram } from "./types";
+import { type Block, BLOCK_TYPES, type Connector, DIAGRAM_VERSION, type Diagram } from "./types";
 
 export * from "./types";
 
@@ -72,6 +72,7 @@ export function validate(raw: unknown): Diagram {
 			if (!b.id) throw new Error("Block missing id");
 			if (ids.has(b.id)) throw new Error(`Duplicate block id: ${b.id}`);
 			ids.add(b.id);
+			if (b.type !== undefined && !BLOCK_TYPES.includes(b.type)) throw new Error(`Block ${b.id} has invalid type: ${b.type}`);
 			if (!Array.isArray(b.comments)) throw new Error(`Block ${b.id} comments must be an array`);
 			if (!Array.isArray(b.children)) throw new Error(`Block ${b.id} children must be an array`);
 			check(b.children);

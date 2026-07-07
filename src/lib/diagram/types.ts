@@ -14,10 +14,21 @@
 
 export const DIAGRAM_VERSION = 3 as const;
 
+/**
+ * What a block represents. Purely semantic — it changes the icon/label shown in
+ * the block header and (later) how the block compiles to prompt text. Absent
+ * `type` reads as `DEFAULT_BLOCK_TYPE`, so old saves keep working unchanged.
+ */
+export const BLOCK_TYPES = ["component", "module", "data", "database"] as const;
+export type BlockType = (typeof BLOCK_TYPES)[number];
+export const DEFAULT_BLOCK_TYPE: BlockType = "component";
+
 export interface Block {
 	/** Stable unique id (unique across the whole diagram, at any depth). */
 	id: string;
 	name: string;
+	/** Semantic kind (see `BlockType`). Absent means `DEFAULT_BLOCK_TYPE`. */
+	type?: BlockType;
 	/** Free-text comments — description, type, intent. Toggled inline per block. */
 	comments: string[];
 	/** Nested blocks (properties, sub-components — all the same thing). */

@@ -2,6 +2,7 @@ import { SvelteMap } from "svelte/reactivity";
 import {
 	type Anchor,
 	type Block,
+	type BlockType,
 	type Connector,
 	type ConnectorKind,
 	type Diagram,
@@ -211,6 +212,13 @@ class EditorStore {
 	rename(id: string, name: string) {
 		const b = this.block(id);
 		if (b) b.name = name;
+	}
+
+	setBlockType(id: string, type: BlockType) {
+		const b = this.block(id);
+		if (!b || b.type === type) return;
+		this.#record();
+		b.type = type;
 	}
 
 	#removeBlock(id: string) {

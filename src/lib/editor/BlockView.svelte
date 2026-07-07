@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Block } from "../diagram";
+	import BlockTypeSelect from "./BlockTypeSelect.svelte";
 	import { editor } from "./store.svelte";
 	import Self from "./BlockView.svelte";
 
@@ -75,6 +76,7 @@
 	use:measure
 >
 	<div class="head">
+		<BlockTypeSelect {block} />
 
 		{#if editingName}
 			<input
@@ -246,7 +248,7 @@
 	}
 	.name-input {
 		border: none;
-		background: var(--accent, #f4f4f5);
+		background: transparent;
 		border-radius: 4px;
 		padding: 1px 5px;
 		font-family: inherit;
