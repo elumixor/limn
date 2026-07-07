@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { Connector } from "../diagram";
 	import { editor } from "./store.svelte";
 	import BlockView from "./BlockView.svelte";
 	import ContextMenu from "./ContextMenu.svelte";
@@ -42,6 +43,46 @@
 
 <svelte:window onpointermove={ctl.onWindowPointerMove} onpointerup={ctl.onWindowPointerUp} />
 
+<!-- A connector's clickable hit-area + visible line. Rendered behind blocks for
+     root↔root connectors, but on top for any connector touching a nested block
+     so it isn't swallowed by the parent box it emerges from. -->
+{#snippet edge(c: Connector)}
+	{@const d = curve(ctl.geo(c))}
+	{@const sel = editor.selectedConnector === c.id}
+	<path
+		class="edge-hit"
+		{d}
+		onpointerdown={(e) => {
+			e.stopPropagation();
+			editor.selectConnector(c.id);
+		}}
+		ondblclick={(e) => {
+			e.stopPropagation();
+			editor.selectConnector(c.id);
+			editor.editing = { id: c.id, part: "connector" };
+		}}
+		oncontextmenu={(e) => ctl.onConnectorContextMenu(c.id, e)}
+		role="button"
+		tabindex="-1"
+	/>
+	<path {d} stroke={sel ? "#6366f1" : "#a1a1aa"} stroke-width={sel ? 2.5 : 1.5} fill="none" />
+{/snippet}
+
+<!-- Arrowhead(s), always drawn on top of blocks so they stay visible. -->
+{#snippet arrowhead(c: Connector)}
+	{#if c.kind !== "line"}
+		{@const d = curve(ctl.geo(c))}
+		{@const sel = editor.selectedConnector === c.id}
+		<path
+			{d}
+			stroke="transparent"
+			fill="none"
+			marker-end={`url(#${sel ? "ah-sel" : "ah"})`}
+			marker-start={c.kind === "double" ? `url(#${sel ? "ah-sel" : "ah"})` : undefined}
+		/>
+	{/if}
+{/snippet}
+
 <div
 	bind:this={viewport}
 	class="viewport"
@@ -64,32 +105,9 @@
 				</marker>
 			</defs>
 			{#each editor.diagram.connectors as c (c.id)}
-				{@const g = ctl.geo(c)}
-				{@const d = curve(g)}
-				{@const sel = editor.selectedConnector === c.id}
-				{@const col = sel ? "#6366f1" : "#a1a1aa"}
-				<path
-					class="edge-hit"
-					{d}
-					onpointerdown={(e) => {
-						e.stopPropagation();
-						editor.selectConnector(c.id);
-					}}
-					ondblclick={(e) => {
-						e.stopPropagation();
-						editor.selectConnector(c.id);
-						editor.editing = { id: c.id, part: "connector" };
-					}}
-					oncontextmenu={(e) => ctl.onConnectorContextMenu(c.id, e)}
-					role="button"
-					tabindex="-1"
-				/>
-				<path
-					{d}
-					stroke={col}
-					stroke-width={sel ? 2.5 : 1.5}
-					fill="none"
-				/>
+				{#if editor.isRoot(c.source) && editor.isRoot(c.target)}
+					{@render edge(c)}
+				{/if}
 			{/each}
 			{#if ctl.linking && editor.pendingConnector}
 				{@const a = ctl.canvasRect(editor.pendingConnector)}
@@ -135,20 +153,15 @@
 			<BlockView {block} root />
 		{/each}
 
-		<!-- Arrowheads drawn on top of blocks (the lines themselves stay behind) -->
+		<!-- Top layer above blocks: arrowheads for every connector, plus the full
+		     line for connectors touching a nested block (so it shows in front of the
+		     parent instead of being hidden behind it). -->
 		<svg class="edges edges-top">
 			{#each editor.diagram.connectors as c (c.id)}
-				{@const d = curve(ctl.geo(c))}
-				{@const sel = editor.selectedConnector === c.id}
-				{#if c.kind !== "line"}
-					<path
-						{d}
-						stroke="transparent"
-						fill="none"
-						marker-end={`url(#${sel ? "ah-sel" : "ah"})`}
-						marker-start={c.kind === "double" ? `url(#${sel ? "ah-sel" : "ah"})` : undefined}
-					/>
+				{#if !(editor.isRoot(c.source) && editor.isRoot(c.target))}
+					{@render edge(c)}
 				{/if}
+				{@render arrowhead(c)}
 			{/each}
 		</svg>
 
