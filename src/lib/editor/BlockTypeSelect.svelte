@@ -101,10 +101,12 @@
 		line-height: 1;
 		cursor: pointer;
 		user-select: none;
+		opacity: 0.6;
 	}
 	.type-btn:hover {
 		background: var(--accent, #f4f4f5);
 		border-color: var(--border, #e4e4e7);
+		opacity: 1;
 	}
 	.type-label {
 		overflow: hidden;
