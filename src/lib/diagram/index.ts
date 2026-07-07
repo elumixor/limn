@@ -1,10 +1,18 @@
-import { type Block, BLOCK_TYPES, type Connector, DIAGRAM_VERSION, type Diagram } from "./types";
+import {
+	type Block,
+	BLOCK_TYPES,
+	type Connector,
+	DIAGRAM_VERSION,
+	type Diagram,
+	type Mapping,
+	type UIElement,
+} from "./types";
 
 export * from "./types";
 
 /** The canonical empty diagram. */
 export function emptyDiagram(): Diagram {
-	return { version: DIAGRAM_VERSION, blocks: [], connectors: [] };
+	return { version: DIAGRAM_VERSION, blocks: [], connectors: [], ui: [], mappings: [] };
 }
 
 /** Depth-first walk over every block, with its parent (null for roots). */
@@ -55,7 +63,20 @@ export function serialize(d: Diagram): string {
 }
 
 export function parse(json: string): Diagram {
-	return validate(JSON.parse(json) as unknown);
+	return validate(migrate(JSON.parse(json) as unknown));
+}
+
+/** Upgrade an older-version diagram in place to the current shape (v3 → v4 adds
+ *  the UI canvas + mappings). Returns the same object; `validate` still gates it. */
+export function migrate(raw: unknown): unknown {
+	if (typeof raw !== "object" || raw === null) return raw;
+	const d = raw as Record<string, unknown>;
+	if (d.version === 3) {
+		d.version = DIAGRAM_VERSION;
+		d.ui ??= [];
+		d.mappings ??= [];
+	}
+	return d;
 }
 
 /** Validate an unknown value as a Diagram, throwing on the first problem. */
@@ -65,6 +86,8 @@ export function validate(raw: unknown): Diagram {
 	if (d.version !== DIAGRAM_VERSION) throw new Error(`Unsupported diagram version: ${String(d.version)}`);
 	if (!Array.isArray(d.blocks)) throw new Error("Diagram.blocks must be an array");
 	if (!Array.isArray(d.connectors)) throw new Error("Diagram.connectors must be an array");
+	if (!Array.isArray(d.ui)) throw new Error("Diagram.ui must be an array");
+	if (!Array.isArray(d.mappings)) throw new Error("Diagram.mappings must be an array");
 
 	const ids = new Set<string>();
 	const check = (blocks: Block[]) => {
@@ -87,6 +110,22 @@ export function validate(raw: unknown): Diagram {
 		cIds.add(c.id);
 		if (!ids.has(c.source)) throw new Error(`Connector ${c.id} missing source: ${c.source}`);
 		if (!ids.has(c.target)) throw new Error(`Connector ${c.id} missing target: ${c.target}`);
+	}
+
+	const eIds = new Set<string>();
+	for (const e of d.ui as UIElement[]) {
+		if (!e.id) throw new Error("UI element missing id");
+		if (eIds.has(e.id)) throw new Error(`Duplicate UI element id: ${e.id}`);
+		eIds.add(e.id);
+	}
+
+	const mIds = new Set<string>();
+	for (const m of d.mappings as Mapping[]) {
+		if (!m.id) throw new Error("Mapping missing id");
+		if (mIds.has(m.id)) throw new Error(`Duplicate mapping id: ${m.id}`);
+		mIds.add(m.id);
+		if (!ids.has(m.blockId)) throw new Error(`Mapping ${m.id} references missing block: ${m.blockId}`);
+		if (!eIds.has(m.elementId)) throw new Error(`Mapping ${m.id} references missing UI element: ${m.elementId}`);
 	}
 
 	return d as unknown as Diagram;

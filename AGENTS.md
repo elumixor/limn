@@ -41,21 +41,25 @@ Two domains, kept separate:
 ### `src/lib/diagram/` — the pure model
 
 - `types.ts` — the data model. `Block` (recursive: `name`, `comments[]`,
-  `children[]`, optional `x/y/w/h`, `showComments`), `Connector`, `Diagram`,
-  `Anchor`. Bump `DIAGRAM_VERSION` and migrate when the shape changes.
+  `children[]`, optional `x/y/w/h`, `showComments`), `Connector`, `UIElement`
+  (a free-drawn box on the UI canvas), `Mapping` (component→UI-element link),
+  `Diagram` (`blocks`, `connectors`, `ui`, `mappings`), `Anchor`. Bump
+  `DIAGRAM_VERSION` and migrate when the shape changes.
 - `index.ts` — pure tree operations: `walk`, `findBlock`, `ownerList`,
-  `isAncestor`, `isRoot`, `serialize`/`parse`, and `validate` (throws on the
-  first structural problem; the gatekeeper for anything loaded from disk or
-  `localStorage`).
+  `isAncestor`, `isRoot`, `serialize`/`parse`, `migrate` (upgrades older-version
+  saves forward), and `validate` (throws on the first structural problem; the
+  gatekeeper for anything loaded from disk or `localStorage`).
 
 No DOM, no Svelte, no editor state here. Plain JSON that round-trips losslessly.
 
 ### `src/lib/editor/` — the editor
 
 - `store.svelte.ts` — `EditorStore`, the single source of truth (`export const
-  editor`). Owns the `Diagram`, selection, editing state, pending-connector
-  state, measured root sizes, pan offset, and all model mutations. Drives undo
-  via `History` and autosave via an `$effect.root`. **All model changes go
+  editor`). Owns the `Diagram`, selection (blocks / connector / UI element /
+  mapping), editing state, pending-connector and pending-mapping state, which
+  panes are visible (`panes` — Components and/or UI; both = split view), the two
+  canvases' pan offsets, measured root sizes, and all model mutations. Drives
+  undo via `History` and autosave via an `$effect.root`. **All model changes go
   through this class** — never mutate `editor.diagram` from a component.
 - `canvas-controller.svelte.ts` — `CanvasController`, the pointer-interaction
   state machine. Owns transient interaction state (pan / drag / resize / marquee
@@ -68,13 +72,24 @@ No DOM, no Svelte, no editor state here. Plain JSON that round-trips losslessly.
   constants). The parent-fits-its-children rules live here so the store and the
   controller agree.
 - `dom.ts` — tiny shared DOM predicates (`isTextInput`, `blockIdAt`).
-- `Canvas.svelte` — markup + SVG. Reads controller/store state and forwards
-  events to the controller; holds almost no logic itself.
+- `Canvas.svelte` — the **Components** screen: markup + SVG. Reads
+  controller/store state and forwards events to the controller; holds almost no
+  logic itself.
 - `BlockView.svelte` — recursive block renderer (renders itself for children).
+- `UIView.svelte` — the **UI** screen: a second, self-contained freeform canvas
+  for free-drawn `UIElement` boxes (double-click to add, drag to move, corner to
+  resize). Its own pan (`editor.uiPan`); no nesting or connectors.
+- `MappingLayer.svelte` — absolute overlay shown only in split view. Reads the
+  live on-screen rects of both panes each frame (rAF) to draw component→UI
+  mapping links, and hosts the drag handle that creates them (the two canvases
+  pan independently, so the DOM is the only shared coordinate space).
+- `ViewSwitcher.svelte` — the top-center Components/UI segmented control
+  (`editor.togglePane`).
 - `ContextMenu.svelte` — generic menu driven by a `MenuItem[]`.
 
 `src/routes/+page.svelte` is the page shell: global keyboard shortcuts, the
-Save/Load dock, and CSS variables (theme tokens).
+Components/UI split layout, the switcher + Save/Load dock, and CSS variables
+(theme tokens).
 
 ### The split that matters
 
@@ -115,7 +130,8 @@ rendering (`*.svelte`). Keep it that way:
   (`vrect`, `droptarget`, `subblock`, …). Not real findings.
 - `validate()` runs on every load and every undo/redo restore. If you add or
   rename model fields, update `validate` and the `DIAGRAM_VERSION` together.
-- `localStorage` key is `limn.diagram.v3` — bump it (and migrate) on a
+- `localStorage` key is `limn.diagram.v4` (older keys in `LEGACY_KEYS` are read
+  once and migrated forward via `migrate`). Bump it (and add a migration) on a
   breaking model change, or old saves will fail `validate` and silently reset to
   an empty diagram.
 

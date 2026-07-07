@@ -12,7 +12,7 @@
  * Plain JSON: `JSON.parse(JSON.stringify(diagram))` round-trips losslessly.
  */
 
-export const DIAGRAM_VERSION = 3 as const;
+export const DIAGRAM_VERSION = 4 as const;
 
 /**
  * What a block represents. Purely semantic — it changes the icon/label shown in
@@ -70,9 +70,36 @@ export interface Connector {
 	targetAnchor?: Anchor;
 }
 
+/**
+ * A rectangle on the **UI** canvas — a rough mockup frame the user draws freely.
+ * Unlike blocks it has no tree, no comments, no semantics: it's a visual box that
+ * a component (root block) can be *mapped* to. Coordinates are UI-canvas space.
+ */
+export interface UIElement {
+	id: string;
+	label: string;
+	x: number;
+	y: number;
+	w: number;
+	h: number;
+}
+
+/** Links a component (root block) to the UI element that visually represents it. */
+export interface Mapping {
+	id: string;
+	/** Root block id (the component). */
+	blockId: string;
+	/** UI element id (its visual representation). */
+	elementId: string;
+}
+
 export interface Diagram {
 	version: typeof DIAGRAM_VERSION;
-	/** Root blocks (on the canvas). */
+	/** Root blocks (on the Components canvas). */
 	blocks: Block[];
 	connectors: Connector[];
+	/** Free-drawn boxes on the UI canvas. */
+	ui: UIElement[];
+	/** Component → UI-element links. */
+	mappings: Mapping[];
 }

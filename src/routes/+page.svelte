@@ -2,12 +2,16 @@
 	import { isTextInput } from "$lib/editor/dom";
 	import { editor } from "$lib/editor/store.svelte";
 	import Canvas from "$lib/editor/Canvas.svelte";
+	import UIView from "$lib/editor/UIView.svelte";
+	import MappingLayer from "$lib/editor/MappingLayer.svelte";
+	import ViewSwitcher from "$lib/editor/ViewSwitcher.svelte";
 
 	let fileInput: HTMLInputElement;
 	let mouse = { x: 0, y: 0 };
 
 	function addBoxAtMouse() {
-		const el = document.querySelector(".viewport") as HTMLElement | null;
+		if (!editor.panes.components) return;
+		const el = document.querySelector(".pane.components .viewport") as HTMLElement | null;
 		const r = el?.getBoundingClientRect();
 		const over = r && mouse.y > r.top && mouse.x > r.left && mouse.y < r.bottom && mouse.x < r.right;
 		const cx = over ? mouse.x : (r?.left ?? 0) + 200;
@@ -84,7 +88,21 @@
 <svelte:window onkeydown={onKeydown} onpointermove={(e) => (mouse = { x: e.clientX, y: e.clientY })} />
 
 <div class="app">
-	<main><Canvas /></main>
+	<main>
+		<div class="split">
+			{#if editor.panes.components}
+				<section class="pane components"><Canvas /></section>
+			{/if}
+			{#if editor.panes.ui}
+				<section class="pane ui"><UIView /></section>
+			{/if}
+			{#if editor.isSplit}
+				<MappingLayer />
+			{/if}
+		</div>
+	</main>
+
+	<div class="switcher-dock"><ViewSwitcher /></div>
 
 	<footer class="hints">
 		<span><kbd>N</kbd> box</span>
@@ -94,7 +112,13 @@
 		<span><kbd>↵</kbd> rename</span>
 		<span><kbd>⌫</kbd> delete</span>
 		<span><kbd>⌘Z</kbd> undo</span>
-		<span class="dim">click to edit · drag to move · drag onto a box to nest · drag the dot to connect · autosaved</span>
+		{#if editor.isSplit}
+			<span class="dim">select a component, then drag its <b>◦</b> handle onto a UI frame to map it · autosaved</span>
+		{:else if editor.panes.ui}
+			<span class="dim">double-click to add a UI frame · drag to move · drag the corner to resize · autosaved</span>
+		{:else}
+			<span class="dim">click to edit · drag to move · drag onto a box to nest · drag the dot to connect · autosaved</span>
+		{/if}
 	</footer>
 
 	<div class="title">Limn</div>
@@ -136,6 +160,28 @@
 		flex: 1;
 		min-height: 0;
 		position: relative;
+	}
+	.split {
+		position: relative;
+		display: flex;
+		width: 100%;
+		height: 100%;
+	}
+	.pane {
+		flex: 1 1 0;
+		min-width: 0;
+		height: 100%;
+		position: relative;
+	}
+	.pane.ui {
+		border-left: 1px solid var(--border);
+	}
+	.switcher-dock {
+		position: fixed;
+		top: 14px;
+		left: 50%;
+		transform: translateX(-50%);
+		z-index: 10;
 	}
 	.hints {
 		display: flex;

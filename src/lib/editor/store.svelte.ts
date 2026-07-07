@@ -10,8 +10,11 @@ import {
 	findBlock,
 	isAncestor,
 	isRoot,
+	type Mapping,
+	migrate,
 	ownerList,
 	serialize,
+	type UIElement,
 	validate,
 } from "../diagram";
 import { History } from "./history";
@@ -25,7 +28,12 @@ import {
 	nextChildY,
 } from "./layout";
 
-const STORAGE_KEY = "limn.diagram.v3";
+const STORAGE_KEY = "limn.diagram.v4";
+/** Previous key — migrated forward once so existing local diagrams survive the v3→v4 bump. */
+const LEGACY_KEYS = ["limn.diagram.v3"] as const;
+
+/** Default size of a freshly drawn UI element. */
+const DEFAULT_UI_SIZE = { w: 180, h: 120 } as const;
 
 /** Offset from a click point to a new block's top-left, so the box lands centred under the cursor. */
 const NEW_BLOCK_OFFSET = { x: 85, y: 20 } as const;
@@ -37,6 +45,10 @@ function uid(prefix: string): string {
 
 function newBlock(name = "Untitled"): Block {
 	return { id: uid("b"), name, comments: [], children: [] };
+}
+
+function newElement(x: number, y: number): UIElement {
+	return { id: uid("u"), label: "Frame", x, y, w: DEFAULT_UI_SIZE.w, h: DEFAULT_UI_SIZE.h };
 }
 
 /** Ensure every nested block has explicit geometry and every parent is big
@@ -63,14 +75,19 @@ export type Editing =
 	| { id: string; part: "name" }
 	| { id: string; part: "comment"; index: number }
 	| { id: string; part: "connector" }
+	| { id: string; part: "ui" }
 	| null;
+
+/** Which of the two screens are visible. Components is the primary; at least one
+ *  pane is always shown, and both on means the split view. */
+export type Panes = { components: boolean; ui: boolean };
 
 function loadInitial(): Diagram {
 	if (typeof localStorage === "undefined") return emptyDiagram();
-	const saved = localStorage.getItem(STORAGE_KEY);
+	const saved = localStorage.getItem(STORAGE_KEY) ?? LEGACY_KEYS.map((k) => localStorage.getItem(k)).find(Boolean);
 	if (!saved) return emptyDiagram();
 	try {
-		const d = validate(JSON.parse(saved));
+		const d = validate(migrate(JSON.parse(saved)));
 		normalizeLayout(d);
 		return d;
 	} catch {
@@ -99,6 +116,18 @@ class EditorStore {
 	/** Transient drag feedback (not persisted). */
 	draggingId = $state<string | null>(null);
 	dropTarget = $state<string | null>(null);
+
+	// ---- view + UI screen ---------------------------------------------------
+	/** Which screens are visible. Components-only by default; both = split view. */
+	panes = $state<Panes>({ components: true, ui: false });
+	/** Pan offset of the UI canvas (independent of the Components canvas). */
+	uiPan = $state({ x: 0, y: 0 });
+	/** Selected UI element id (mutually exclusive with block/connector selection). */
+	selectedElement = $state<string | null>(null);
+	/** Selected mapping link id. */
+	selectedMapping = $state<string | null>(null);
+	/** Root block a mapping link is currently being drawn from (drag in progress). */
+	pendingMap = $state<string | null>(null);
 
 	// ---- history ------------------------------------------------------------
 	#history = new History();
@@ -129,22 +158,41 @@ class EditorStore {
 		this.#prune();
 	}
 
+	// ---- view ---------------------------------------------------------------
+	/** Toggle a pane on/off, keeping at least one visible (Components is the fallback). */
+	togglePane(pane: keyof Panes) {
+		const next = { ...this.panes, [pane]: !this.panes[pane] };
+		if (!next.components && !next.ui) next.components = true; // never hide everything
+		this.panes = next;
+	}
+	get isSplit(): boolean {
+		return this.panes.components && this.panes.ui;
+	}
+
 	// ---- selection ----------------------------------------------------------
 	selectBlock(id: string) {
 		this.selectedBlocks = [id];
 		this.selectedConnector = null;
+		this.#clearUISelection();
 	}
 	selectBlocks(ids: string[]) {
 		this.selectedBlocks = ids;
 		this.selectedConnector = null;
+		this.#clearUISelection();
 	}
 	selectConnector(id: string) {
 		this.selectedConnector = id;
 		this.selectedBlocks = [];
+		this.#clearUISelection();
 	}
 	clearSelection() {
 		this.selectedBlocks = [];
 		this.selectedConnector = null;
+		this.#clearUISelection();
+	}
+	#clearUISelection() {
+		this.selectedElement = null;
+		this.selectedMapping = null;
 	}
 	isBlockSelected(id: string) {
 		return this.selectedBlocks.includes(id);
@@ -166,6 +214,9 @@ class EditorStore {
 		this.selectedBlocks = this.selectedBlocks.filter((id) => this.block(id));
 		if (this.selectedConnector && !this.diagram.connectors.some((c) => c.id === this.selectedConnector))
 			this.selectedConnector = null;
+		if (this.selectedElement && !this.element(this.selectedElement)) this.selectedElement = null;
+		if (this.selectedMapping && !this.diagram.mappings.some((m) => m.id === this.selectedMapping))
+			this.selectedMapping = null;
 	}
 
 	// ---- block mutations ----------------------------------------------------
@@ -235,6 +286,7 @@ class EditorStore {
 			1,
 		);
 		this.diagram.connectors = this.diagram.connectors.filter((c) => !removed.has(c.source) && !removed.has(c.target));
+		this.diagram.mappings = this.diagram.mappings.filter((m) => !removed.has(m.blockId));
 		this.selectedBlocks = this.selectedBlocks.filter((s) => !removed.has(s));
 	}
 
@@ -371,8 +423,102 @@ class EditorStore {
 		if (this.selectedConnector === id) this.selectedConnector = null;
 	}
 
+	// ---- UI elements --------------------------------------------------------
+	element(id: string): UIElement | undefined {
+		return this.diagram.ui.find((e) => e.id === id);
+	}
+	selectElement(id: string) {
+		this.selectedElement = id;
+		this.selectedBlocks = [];
+		this.selectedConnector = null;
+		this.selectedMapping = null;
+	}
+	isElementSelected(id: string) {
+		return this.selectedElement === id;
+	}
+	addElement(x: number, y: number): UIElement {
+		this.#record();
+		const e = newElement(x, y);
+		this.diagram.ui.push(e);
+		this.selectElement(e.id);
+		this.editing = { id: e.id, part: "ui" };
+		return e;
+	}
+	renameElement(id: string, label: string) {
+		const e = this.element(id);
+		if (e) e.label = label;
+	}
+	moveElement(id: string, x: number, y: number) {
+		const e = this.element(id);
+		if (e) {
+			e.x = x;
+			e.y = y;
+		}
+	}
+	resizeElement(id: string, w: number, h: number) {
+		const e = this.element(id);
+		if (e) {
+			e.w = Math.round(w);
+			e.h = Math.round(h);
+		}
+	}
+	#removeElement(id: string) {
+		this.diagram.ui = this.diagram.ui.filter((e) => e.id !== id);
+		this.diagram.mappings = this.diagram.mappings.filter((m) => m.elementId !== id);
+		if (this.selectedElement === id) this.selectedElement = null;
+	}
+	deleteElement(id: string) {
+		this.#record();
+		this.#removeElement(id);
+	}
+
+	// ---- mappings (component ↔ UI element) ----------------------------------
+	/** Begin drawing a mapping link from a root block (the component). */
+	startMapping(blockId: string) {
+		if (this.isRoot(blockId)) this.pendingMap = blockId;
+	}
+	/** Finish a mapping onto a UI element. No-op on self-duplicate or bad ids. */
+	completeMapping(elementId: string): Mapping | undefined {
+		const blockId = this.pendingMap;
+		this.pendingMap = null;
+		if (!blockId || !this.isRoot(blockId) || !this.element(elementId)) return;
+		if (this.diagram.mappings.some((m) => m.blockId === blockId && m.elementId === elementId)) return;
+		this.#record();
+		const m: Mapping = { id: uid("m"), blockId, elementId };
+		this.diagram.mappings.push(m);
+		this.selectedMapping = m.id;
+		return m;
+	}
+	cancelMapping() {
+		this.pendingMap = null;
+	}
+	selectMapping(id: string) {
+		this.selectedMapping = id;
+		this.selectedElement = null;
+	}
+	deleteMapping(id: string) {
+		this.#record();
+		this.diagram.mappings = this.diagram.mappings.filter((m) => m.id !== id);
+		if (this.selectedMapping === id) this.selectedMapping = null;
+	}
+	/** Mappings touching a block or element — used to highlight the counterpart. */
+	mappingsForBlock(blockId: string): Mapping[] {
+		return this.diagram.mappings.filter((m) => m.blockId === blockId);
+	}
+	mappingsForElement(elementId: string): Mapping[] {
+		return this.diagram.mappings.filter((m) => m.elementId === elementId);
+	}
+
 	// ---- keyboard-driven ops ------------------------------------------------
 	deleteSelected() {
+		if (this.selectedMapping) {
+			this.deleteMapping(this.selectedMapping);
+			return;
+		}
+		if (this.selectedElement) {
+			this.deleteElement(this.selectedElement);
+			return;
+		}
 		if (this.selectedConnector) {
 			this.deleteConnector(this.selectedConnector);
 			return;
@@ -404,6 +550,7 @@ class EditorStore {
 		this.editing = null;
 		this.pendingConnector = null;
 		this.pendingAnchor = null;
+		this.pendingMap = null;
 	}
 
 	// ---- import / export ----------------------------------------------------
@@ -412,13 +559,14 @@ class EditorStore {
 	}
 	loadJSON(json: string) {
 		this.#record();
-		const d = validate(JSON.parse(json));
+		const d = validate(migrate(JSON.parse(json)));
 		normalizeLayout(d);
 		this.diagram = d;
 		this.clearSelection();
 		this.editing = null;
 		this.pendingConnector = null;
 		this.pendingAnchor = null;
+		this.pendingMap = null;
 	}
 
 	measure(id: string, w: number, h: number) {
