@@ -57,7 +57,7 @@
 		toggle();
 	}}
 >
-	<BlockTypeIcon icon={meta.icon} />
+	<BlockTypeIcon icon={meta.icon} size={12} />
 	<span class="type-label">{meta.label}</span>
 </button>
 
@@ -76,7 +76,7 @@
 					choose(t);
 				}}
 			>
-				<span class="opt-icon" style="color:{m.color}"><BlockTypeIcon icon={m.icon} /></span>
+				<span class="opt-icon" style="color:{m.color}"><BlockTypeIcon icon={m.icon} size={13} /></span>
 				<span class="opt-label">{m.label}</span>
 				{#if t === current}<span class="check" aria-hidden="true">✓</span>{/if}
 			</button>
