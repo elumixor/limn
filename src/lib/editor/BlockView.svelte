@@ -33,17 +33,25 @@
 		node.addEventListener("input", fit);
 		return { destroy: () => node.removeEventListener("input", fit) };
 	}
+	// Feed connector geometry: root blocks report their measured on-screen size,
+	// and any block with children reports where its `.children` box sits inside
+	// it (so nested blocks can be placed in canvas space — see `canvasRect`).
 	function measure(node: HTMLElement) {
-		if (!root) return;
-		const ro = new ResizeObserver(() => editor.measure(block.id, node.offsetWidth, node.offsetHeight));
+		const sync = () => {
+			if (root) editor.measure(block.id, node.offsetWidth, node.offsetHeight);
+			const kids = node.querySelector(":scope > .children") as HTMLElement | null;
+			if (kids) editor.measureChildOffset(block.id, kids.offsetLeft, kids.offsetTop);
+		};
+		const ro = new ResizeObserver(sync);
 		ro.observe(node);
-		editor.measure(block.id, node.offsetWidth, node.offsetHeight);
+		sync();
 		return {
 			destroy: () => {
 				ro.disconnect();
-				// Drop the measured size when this root unmounts (deleted, or nested so
-				// it's no longer a root) — otherwise `editor.sizes` grows unbounded.
+				// Drop measured data when the block unmounts (deleted, or a root nested so
+				// it's no longer measured here) — otherwise the maps grow unbounded.
 				editor.sizes.delete(block.id);
+				editor.childOffsets.delete(block.id);
 			},
 		};
 	}
@@ -245,10 +253,6 @@
 		border-radius: 4px;
 		padding: 1px 5px;
 		margin: -1px 0;
-	}
-	.name:hover {
-		background: var(--accent, #f4f4f5);
-		box-shadow: inset 0 0 0 1px var(--border, #e4e4e7);
 	}
 	.name-input {
 		border: none;

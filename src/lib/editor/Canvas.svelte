@@ -92,7 +92,7 @@
 				/>
 			{/each}
 			{#if ctl.linking && editor.pendingConnector}
-				{@const a = ctl.rect(editor.pendingConnector)}
+				{@const a = ctl.canvasRect(editor.pendingConnector)}
 				{@const sa = editor.pendingAnchor ?? pickCardinal(a, ctl.linking)}
 				{@const p1 = anchorPoint(a, sa)}
 				{@const dl = curve({ p1, p2: ctl.linking, d1: anchorDir(sa), d2: { x: 0, y: 0 } })}
@@ -193,10 +193,10 @@
 			{/each}
 		{/if}
 
-		<!-- The 4 cardinal connection handles, shown while hovering a root block -->
-		{#if ctl.hover && editor.isRoot(ctl.hover.id) && !ctl.endDrag && !editor.pendingConnector && !ctl.drag && !ctl.resizing}
+		<!-- The 4 cardinal connection handles, shown while hovering any block -->
+		{#if ctl.hover && !ctl.endDrag && !editor.pendingConnector && !ctl.drag && !ctl.resizing}
 			{@const hid = ctl.hover.id}
-			{@const hr = ctl.rect(hid)}
+			{@const hr = ctl.canvasRect(hid)}
 			{#each CARDINALS as c (c.key)}
 				{@const p = handlePoint(hr, c)}
 				<div

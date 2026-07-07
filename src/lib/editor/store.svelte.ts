@@ -90,6 +90,10 @@ class EditorStore {
 
 	/** Measured sizes of rendered ROOT blocks (not persisted) — for connector geometry. */
 	sizes = new SvelteMap<string, { w: number; h: number }>();
+	/** Measured offset of each parent's `.children` box within its block box (not
+	 *  persisted). Lets connector geometry place nested blocks in canvas space
+	 *  reactively, without reading the DOM on the render hot path. */
+	childOffsets = new SvelteMap<string, { left: number; top: number }>();
 	/** Canvas pan offset (infinite scrolling). */
 	pan = $state({ x: 0, y: 0 });
 	/** Transient drag feedback (not persisted). */
@@ -287,8 +291,7 @@ class EditorStore {
 				parent.children.push(block);
 				this.#fit(parent);
 			}
-			const nested = descendantIds(block);
-			this.diagram.connectors = this.diagram.connectors.filter((c) => !nested.has(c.source) && !nested.has(c.target));
+			// Connectors survive nesting: nested blocks connect just like roots.
 		}
 	}
 
@@ -318,17 +321,16 @@ class EditorStore {
 		return this.diagram.connectors.find((c) => c.id === id);
 	}
 	startConnector(sourceId: string, anchor: Anchor | null = null) {
-		if (this.isRoot(sourceId)) {
-			this.pendingConnector = sourceId;
-			this.pendingAnchor = anchor;
-		}
+		if (!this.block(sourceId)) return;
+		this.pendingConnector = sourceId;
+		this.pendingAnchor = anchor;
 	}
 	completeConnector(targetId: string, targetAnchor: Anchor | null = null): Connector | undefined {
 		const src = this.pendingConnector;
 		const srcAnchor = this.pendingAnchor;
 		this.pendingConnector = null;
 		this.pendingAnchor = null;
-		if (!src || src === targetId || !this.isRoot(targetId)) return;
+		if (!src || src === targetId || !this.block(targetId)) return;
 		if (this.diagram.connectors.some((c) => c.source === src && c.target === targetId)) return;
 		this.#record();
 		const c: Connector = { id: uid("c"), source: src, target: targetId, kind: "arrow" };
@@ -341,7 +343,7 @@ class EditorStore {
 	/** Move one end of a connector to a (possibly new) block and pin its border anchor. */
 	setConnectorEnd(id: string, end: "source" | "target", blockId: string, anchor: Anchor) {
 		const c = this.connector(id);
-		if (!c || !this.isRoot(blockId)) return;
+		if (!c || !this.block(blockId)) return;
 		const other = end === "source" ? c.target : c.source;
 		if (blockId === other) return; // can't point a connector at the same block on both ends
 		if (end === "source") {
@@ -422,6 +424,11 @@ class EditorStore {
 	measure(id: string, w: number, h: number) {
 		const prev = this.sizes.get(id);
 		if (!prev || prev.w !== w || prev.h !== h) this.sizes.set(id, { w, h });
+	}
+	/** Record where a parent's `.children` box sits inside its block box (see `childOffsets`). */
+	measureChildOffset(id: string, left: number, top: number) {
+		const prev = this.childOffsets.get(id);
+		if (!prev || prev.left !== left || prev.top !== top) this.childOffsets.set(id, { left, top });
 	}
 }
 

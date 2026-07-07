@@ -5,11 +5,11 @@
  * nested blocks. The component (`Canvas.svelte`) is left as markup that reads
  * this state and forwards events here.
  */
-import type { Anchor, Connector } from "../diagram";
+import type { Anchor, Block, Connector } from "../diagram";
 import type { MenuItem } from "./ContextMenu.svelte";
 import { blockIdAt, isTextInput } from "./dom";
 import { connectorGeo, type Geo, nearestCardinal, type Rect } from "./geometry";
-import { childrenExtent, DEFAULT_ROOT_SIZE, NEST_INSET } from "./layout";
+import { childrenExtent, DEFAULT_CHILD_H, DEFAULT_CHILD_W, DEFAULT_ROOT_SIZE, HEADER_ALLOW, NEST_INSET } from "./layout";
 import { editor } from "./store.svelte";
 
 const THRESHOLD = 4;
@@ -97,18 +97,33 @@ export class CanvasController {
 		return { x: b?.x ?? 0, y: b?.y ?? 0, w: b?.w ?? s.w, h: b?.h ?? s.h };
 	}
 	/** Canvas-space rect for any block. Roots use their stored geometry; nested
-	 *  blocks (which flow inside a parent) are read from their DOM box. */
+	 *  blocks accumulate parent-local offsets down the ancestry, adding each
+	 *  parent's measured chrome (its `.children` box offset). Fully derived from
+	 *  reactive model state + measured maps — no DOM read — so connectors follow
+	 *  moves/resizes without a frame of lag. */
 	canvasRect(id: string): Rect {
 		if (editor.isRoot(id)) return this.rect(id);
-		const el = this.#blockEl(id);
-		if (!el) return this.rect(id);
-		const br = el.getBoundingClientRect();
-		const p = this.#toCanvas(br.left, br.top);
-		return { x: p.x, y: p.y, w: br.width, h: br.height };
+		// Ancestry from the root down to the block.
+		const chain: Block[] = [];
+		let cur = editor.block(id);
+		while (cur) {
+			chain.unshift(cur);
+			cur = editor.parentOf(cur.id) ?? undefined;
+		}
+		if (!chain.length) return this.rect(id);
+		let { x, y } = this.rect(chain[0].id); // canvas position of the root
+		for (let i = 1; i < chain.length; i++) {
+			const off = editor.childOffsets.get(chain[i - 1].id) ?? { left: NEST_INSET, top: HEADER_ALLOW };
+			x += off.left + (chain[i].x ?? 0);
+			y += off.top + (chain[i].y ?? 0);
+		}
+		const self = chain[chain.length - 1];
+		const s = editor.sizes.get(id);
+		return { x, y, w: self.w ?? s?.w ?? DEFAULT_CHILD_W, h: self.h ?? s?.h ?? DEFAULT_CHILD_H };
 	}
-	/** Geometry of a connector, from its two root blocks' rects. */
+	/** Geometry of a connector, from its two (root or nested) blocks' rects. */
 	geo(c: Connector): Geo {
-		return connectorGeo(this.rect(c.source), this.rect(c.target), c.sourceAnchor, c.targetAnchor);
+		return connectorGeo(this.canvasRect(c.source), this.canvasRect(c.target), c.sourceAnchor, c.targetAnchor);
 	}
 
 	/** Inner content box of a nested block's parent, in which the block must stay. Null for roots. */
@@ -246,15 +261,15 @@ export class CanvasController {
 			const p = this.#toCanvas(e.clientX, e.clientY);
 			const otherId = this.endDrag.end === "source" ? c.target : c.source;
 			const overId = blockIdAt(document.elementFromPoint(e.clientX, e.clientY));
-			// Re-target to the hovered root block (if any, and not the other end), else keep our block.
+			// Re-target to the hovered block (any depth, but not the other end), else keep our block.
 			const blockId =
-				overId && editor.isRoot(overId) && overId !== otherId
+				overId && overId !== otherId
 					? overId
 					: this.endDrag.end === "source"
 						? c.source
 						: c.target;
 			// Snap to the nearest of the block's 4 cardinal connection points.
-			const anchor = nearestCardinal(this.rect(blockId), p);
+			const anchor = nearestCardinal(this.canvasRect(blockId), p);
 			editor.setConnectorEnd(this.endDrag.id, this.endDrag.end, blockId, anchor);
 			return;
 		}
@@ -374,7 +389,7 @@ export class CanvasController {
 		if (editor.pendingConnector) {
 			const target = blockIdAt(document.elementFromPoint(e.clientX, e.clientY));
 			if (target) {
-				const anchor = nearestCardinal(this.rect(target), this.#toCanvas(e.clientX, e.clientY));
+				const anchor = nearestCardinal(this.canvasRect(target), this.#toCanvas(e.clientX, e.clientY));
 				editor.completeConnector(target, anchor);
 				this.linking = null;
 			} else {
@@ -536,8 +551,8 @@ export class CanvasController {
 			const items: MenuItem[] = [
 				{ label: "Add subblock", hint: "F", action: () => editor.addChild(id) },
 				{ label: "Add comment", hint: "A", action: () => editor.addComment(id) },
+				{ label: "Connect from here", hint: "C", action: () => editor.startConnector(id) },
 			];
-			if (!nested) items.push({ label: "Connect from here", hint: "C", action: () => editor.startConnector(id) });
 			if (nested) {
 				const r = (e.target as HTMLElement).closest("[data-block-id]")?.getBoundingClientRect();
 				const p = this.#toCanvas(r?.left ?? e.clientX, r?.top ?? e.clientY);
