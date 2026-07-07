@@ -70,7 +70,6 @@
 	class:dragging={isDragging}
 	class:droptarget={isDropTarget}
 	class:linking={editor.pendingConnector === block.id}
-	class:centered={!block.children.length}
 	data-block-id={block.id}
 	style={boxStyle(block)}
 	use:measure
@@ -78,31 +77,33 @@
 	<div class="head">
 		<BlockTypeSelect {block} />
 
-		{#if editingName}
-			<input
-				class="name-input"
-				value={block.name}
-				use:autofocus
-				onpointerdown={(e) => e.stopPropagation()}
-				oninput={(e) => editor.rename(block.id, e.currentTarget.value)}
-				onfocus={() => editor.beginTextEdit(`name:${block.id}`)}
-				onblur={() => {
-					if (editor.editing?.id === block.id && editor.editing.part === "name") editor.editing = null;
-				}}
-				onkeydown={(e) => {
-					if (e.key === "Enter" || e.key === "Escape") {
-						e.preventDefault();
-						editor.editing = null;
-					}
-				}}
-			/>
-		{:else}
-			<span class="name" data-edit="name" role="textbox" tabindex="-1">{block.name || "Untitled"}</span>
-		{/if}
+		<div class="title-row">
+			{#if editingName}
+				<input
+					class="name-input"
+					value={block.name}
+					use:autofocus
+					onpointerdown={(e) => e.stopPropagation()}
+					oninput={(e) => editor.rename(block.id, e.currentTarget.value)}
+					onfocus={() => editor.beginTextEdit(`name:${block.id}`)}
+					onblur={() => {
+						if (editor.editing?.id === block.id && editor.editing.part === "name") editor.editing = null;
+					}}
+					onkeydown={(e) => {
+						if (e.key === "Enter" || e.key === "Escape") {
+							e.preventDefault();
+							editor.editing = null;
+						}
+					}}
+				/>
+			{:else}
+				<span class="name" data-edit="name" role="textbox" tabindex="-1">{block.name || "Untitled"}</span>
+			{/if}
 
-		{#if !showComments && block.comments.length}
-			<span class="badge" title="{block.comments.length} comment(s)">💬{block.comments.length}</span>
-		{/if}
+			{#if !showComments && block.comments.length}
+				<span class="badge" title="{block.comments.length} comment(s)">💬{block.comments.length}</span>
+			{/if}
+		</div>
 	</div>
 
 	{#if showComments}
@@ -173,10 +174,6 @@
 		max-width: 320px;
 		box-shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 1px 3px rgb(0 0 0 / 0.04);
 	}
-	/* No children: center the title vertically within the (possibly resized) block. */
-	.block.centered {
-		justify-content: center;
-	}
 	.block:not(.root) {
 		margin: 0;
 		font-size: 12px;
@@ -212,11 +209,18 @@
 	}
 	.head {
 		display: flex;
-		align-items: center;
-		justify-content: center;
-		gap: 5px;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 4px;
 		padding: 7px 9px;
 		position: relative;
+	}
+	.title-row {
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		width: 100%;
+		min-width: 0;
 	}
 	.name,
 	.name-input {
@@ -228,7 +232,7 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		text-align: center;
+		text-align: left;
 	}
 	.block:not(.root) .name,
 	.block:not(.root) .name-input {
