@@ -117,7 +117,7 @@
 		{:else if editor.panes.ui}
 			<span class="dim">double-click to add a UI frame · drag to move · drag the corner to resize · autosaved</span>
 		{:else}
-			<span class="dim">click to edit · drag to move · drag onto a box to nest · drag the dot to connect · autosaved</span>
+			<span class="dim">click to edit · drag to move · drag onto a box to nest · drag the dot to connect · ⌥drag a side to expose · autosaved</span>
 		{/if}
 	</footer>
 

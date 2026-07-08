@@ -12,14 +12,14 @@
  * Plain JSON: `JSON.parse(JSON.stringify(diagram))` round-trips losslessly.
  */
 
-export const DIAGRAM_VERSION = 4 as const;
+export const DIAGRAM_VERSION = 5 as const;
 
 /**
  * What a block represents. Purely semantic — it changes the icon/label shown in
  * the block header and (later) how the block compiles to prompt text. Absent
  * `type` reads as `DEFAULT_BLOCK_TYPE`, so old saves keep working unchanged.
  */
-export const BLOCK_TYPES = ["component", "module", "data", "database"] as const;
+export const BLOCK_TYPES = ["component", "module", "data", "database", "external"] as const;
 export type BlockType = (typeof BLOCK_TYPES)[number];
 export const DEFAULT_BLOCK_TYPE: BlockType = "component";
 
@@ -35,6 +35,9 @@ export interface Block {
 	children: Block[];
 	/** Show comments inline in the block view (default true once a comment exists). */
 	showComments?: boolean;
+	/** Position of this block's comment bubble, as an offset (canvas px) from the
+	 *  block's own top-left. Absent means the default placement (just below it). */
+	commentPos?: { x: number; y: number };
 	/** Canvas position — only meaningful for root blocks. */
 	x?: number;
 	y?: number;
@@ -93,6 +96,20 @@ export interface Mapping {
 	elementId: string;
 }
 
+/**
+ * A "public API" section attached to a block. The exposed content is itself a
+ * full root block (`exposeId`) — free to hold a name, comments, and children —
+ * tied to its owner (`ownerId`) by this relation, which draws the attachment
+ * line and keeps the box moving with its owner. At most one per owner.
+ */
+export interface Expose {
+	id: string;
+	/** The block whose public API this is. */
+	ownerId: string;
+	/** Root block holding the exposed content (defaults to a box named "exposes"). */
+	exposeId: string;
+}
+
 export interface Diagram {
 	version: typeof DIAGRAM_VERSION;
 	/** Root blocks (on the Components canvas). */
@@ -102,4 +119,6 @@ export interface Diagram {
 	ui: UIElement[];
 	/** Component → UI-element links. */
 	mappings: Mapping[];
+	/** Public-API sections attached to blocks. */
+	exposes: Expose[];
 }

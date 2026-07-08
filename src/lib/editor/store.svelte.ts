@@ -7,6 +7,7 @@ import {
 	type ConnectorKind,
 	type Diagram,
 	emptyDiagram,
+	type Expose,
 	findBlock,
 	isAncestor,
 	isRoot,
@@ -22,15 +23,16 @@ import {
 	DEFAULT_CHILD_H,
 	DEFAULT_CHILD_W,
 	descendantIds,
+	EXPOSE_DEFAULT,
 	fitToChildren,
 	NEST_GAP,
 	NEST_INSET,
 	nextChildY,
 } from "./layout";
 
-const STORAGE_KEY = "limn.diagram.v4";
-/** Previous key — migrated forward once so existing local diagrams survive the v3→v4 bump. */
-const LEGACY_KEYS = ["limn.diagram.v3"] as const;
+const STORAGE_KEY = "limn.diagram.v5";
+/** Previous keys — read once and migrated forward so existing local diagrams survive version bumps. */
+const LEGACY_KEYS = ["limn.diagram.v4", "limn.diagram.v3"] as const;
 
 /** Default size of a freshly drawn UI element. */
 const DEFAULT_UI_SIZE = { w: 180, h: 120 } as const;
@@ -276,17 +278,35 @@ class EditorStore {
 		b.type = type;
 	}
 
+	/** Every block id that removing `id` takes with it: its subtree, plus — since an
+	 *  exposes box belongs to its owner — the subtree of any expose box owned by a
+	 *  block already in the set (transitively). */
+	#removalSet(id: string): Set<string> {
+		const removed = new Set<string>();
+		const stack = [id];
+		while (stack.length) {
+			const cur = stack.pop();
+			if (!cur || removed.has(cur)) continue;
+			const b = this.block(cur);
+			if (!b) continue;
+			for (const d of descendantIds(b)) removed.add(d);
+			// An owner takes its exposes box down with it.
+			for (const e of this.diagram.exposes) if (removed.has(e.ownerId) && !removed.has(e.exposeId)) stack.push(e.exposeId);
+		}
+		return removed;
+	}
+
 	#removeBlock(id: string) {
-		const owner = ownerList(this.diagram, id);
-		const block = this.block(id);
-		if (!owner || !block) return;
-		const removed = descendantIds(block);
-		owner.list.splice(
-			owner.list.findIndex((x) => x.id === id),
-			1,
-		);
+		const removed = this.#removalSet(id);
+		if (!removed.size) return;
+		// Prune the whole forest in one pass so nested blocks and cascaded expose
+		// boxes (which are roots) all drop together.
+		const prune = (list: Block[]): Block[] =>
+			list.filter((b) => !removed.has(b.id)).map((b) => ((b.children = prune(b.children)), b));
+		this.diagram.blocks = prune(this.diagram.blocks);
 		this.diagram.connectors = this.diagram.connectors.filter((c) => !removed.has(c.source) && !removed.has(c.target));
 		this.diagram.mappings = this.diagram.mappings.filter((m) => !removed.has(m.blockId));
+		this.diagram.exposes = this.diagram.exposes.filter((e) => !removed.has(e.ownerId) && !removed.has(e.exposeId));
 		this.selectedBlocks = this.selectedBlocks.filter((s) => !removed.has(s));
 	}
 
@@ -312,7 +332,15 @@ class EditorStore {
 		}
 	}
 
+	/** Reposition a block's comment bubble (offset from the block's top-left). */
+	moveCommentBubble(id: string, x: number, y: number) {
+		const b = this.block(id);
+		if (b) b.commentPos = { x: Math.round(x), y: Math.round(y) };
+	}
+
 	reparent(id: string, newParentId: string | null, x = 80, y = 80, opts: { record?: boolean } = {}) {
+		// An exposes box stays a root attached to its owner — never nest it away.
+		if (newParentId && this.isExposeBox(id)) return;
 		if (newParentId && (newParentId === id || isAncestor(this.diagram, id, newParentId))) return;
 		const owner = ownerList(this.diagram, id);
 		const block = this.block(id);
@@ -507,6 +535,36 @@ class EditorStore {
 	}
 	mappingsForElement(elementId: string): Mapping[] {
 		return this.diagram.mappings.filter((m) => m.elementId === elementId);
+	}
+
+	// ---- exposes (public-API sections) --------------------------------------
+	/** The expose relation owned by a block, if any (at most one). */
+	exposeOf(ownerId: string): Expose | undefined {
+		return this.diagram.exposes.find((e) => e.ownerId === ownerId);
+	}
+	/** The root-block id of a block's exposes box, if it has one. */
+	attachedExposeId(ownerId: string): string | undefined {
+		return this.exposeOf(ownerId)?.exposeId;
+	}
+	/** True when `id` is the content box of some expose (so it moves with its owner). */
+	isExposeBox(id: string): boolean {
+		return this.diagram.exposes.some((e) => e.exposeId === id);
+	}
+	/** Attach a public-API section to a root block. No-op if it already has one.
+	 *  The box is a full root block (named "exposes") placed at the drop point. */
+	createExpose(ownerId: string, x: number, y: number): Block | undefined {
+		if (!this.isRoot(ownerId) || this.exposeOf(ownerId)) return;
+		this.#record();
+		const b = newBlock("exposes");
+		b.x = x;
+		b.y = y;
+		b.w = EXPOSE_DEFAULT.w;
+		b.h = EXPOSE_DEFAULT.h;
+		this.diagram.blocks.push(b);
+		this.diagram.exposes.push({ id: uid("x"), ownerId, exposeId: b.id });
+		this.selectBlock(b.id);
+		this.editing = { id: b.id, part: "name" };
+		return b;
 	}
 
 	// ---- keyboard-driven ops ------------------------------------------------

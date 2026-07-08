@@ -9,7 +9,15 @@ import type { Anchor, Block, Connector } from "../diagram";
 import type { MenuItem } from "./ContextMenu.svelte";
 import { blockIdAt, isTextInput } from "./dom";
 import { connectorGeo, type Geo, nearestCardinal, type Rect } from "./geometry";
-import { childrenExtent, DEFAULT_CHILD_H, DEFAULT_CHILD_W, DEFAULT_ROOT_SIZE, HEADER_ALLOW, NEST_INSET } from "./layout";
+import {
+	childrenExtent,
+	DEFAULT_CHILD_H,
+	DEFAULT_CHILD_W,
+	DEFAULT_ROOT_SIZE,
+	EXPOSE_DEFAULT,
+	HEADER_ALLOW,
+	NEST_INSET,
+} from "./layout";
 import { editor } from "./store.svelte";
 
 const THRESHOLD = 4;
@@ -33,6 +41,9 @@ type Drag = {
 	sy: number;
 	moving: boolean;
 	group: string[];
+	/** Attached exposes boxes dragged along with `group`, kept out of it so the
+	 *  nest/detach logic (which keys off `group.length === 1`) is unaffected. */
+	extra: string[];
 	start: Map<string, { x: number; y: number }>;
 	px: number;
 	py: number;
@@ -62,6 +73,9 @@ export class CanvasController {
 	} | null>(null);
 	/** In-place "create a block here" prompt, shown when a connector is dropped on empty space. */
 	addPrompt = $state<{ x: number; y: number } | null>(null);
+	/** Alt-drag out of a block's side to attach a public-API ("exposes") box.
+	 *  `x`/`y` follow the cursor in canvas space; the box is created on release. */
+	exposeDrag = $state<{ ownerId: string; sx: number; sy: number; x: number; y: number; moved: boolean } | null>(null);
 	// Transient, handler-only drag state: never read in markup, so it's declared
 	// raw to avoid both the spurious "not reactive" warning and proxy overhead on
 	// the pointermove hot path.
@@ -125,6 +139,10 @@ export class CanvasController {
 	geo(c: Connector): Geo {
 		return connectorGeo(this.canvasRect(c.source), this.canvasRect(c.target), c.sourceAnchor, c.targetAnchor);
 	}
+	/** Geometry of an expose's attachment line, border-to-border between owner and box. */
+	exposeGeo(ownerId: string, exposeId: string): Geo {
+		return connectorGeo(this.canvasRect(ownerId), this.canvasRect(exposeId));
+	}
 
 	/** Inner content box of a nested block's parent, in which the block must stay. Null for roots. */
 	#parentInner(id: string): { w: number; h: number } | null {
@@ -155,6 +173,16 @@ export class CanvasController {
 
 	// ---- pointer ------------------------------------------------------------
 	onPointerDown = (e: PointerEvent) => {
+		if (e.button === 0 && e.altKey) {
+			// Alt-drag out of a root block spawns its "exposes" box; anywhere else it pans.
+			const overId = blockIdAt(e.target);
+			if (overId && editor.isRoot(overId) && !editor.isExposeBox(overId) && !editor.exposeOf(overId)) {
+				e.preventDefault();
+				const p = this.#toCanvas(e.clientX, e.clientY);
+				this.exposeDrag = { ownerId: overId, sx: e.clientX, sy: e.clientY, x: p.x, y: p.y, moved: false };
+				return;
+			}
+		}
 		if (e.button === 1 || (e.button === 0 && e.altKey)) {
 			e.preventDefault();
 			this.panning = { sx: e.clientX, sy: e.clientY, px: editor.pan.x, py: editor.pan.y };
@@ -183,6 +211,7 @@ export class CanvasController {
 			sy: e.clientY,
 			moving: false,
 			group: [],
+			extra: [],
 			start: new Map(),
 			px: 0,
 			py: 0,
@@ -226,6 +255,12 @@ export class CanvasController {
 				x: this.panning.px + (e.clientX - this.panning.sx),
 				y: this.panning.py + (e.clientY - this.panning.sy),
 			};
+			return;
+		}
+		if (this.exposeDrag) {
+			const p = this.#toCanvas(e.clientX, e.clientY);
+			const moved = this.exposeDrag.moved || Math.hypot(e.clientX - this.exposeDrag.sx, e.clientY - this.exposeDrag.sy) >= THRESHOLD;
+			this.exposeDrag = { ...this.exposeDrag, x: p.x, y: p.y, moved };
 			return;
 		}
 		if (this.resizing) {
@@ -302,7 +337,14 @@ export class CanvasController {
 				editor.selectBlock(drag.id);
 				drag.group = [drag.id];
 			}
+			// Each moved block's owner drags its attached exposes box along, so the
+			// box keeps its position relative to the owner.
+			drag.extra = [];
 			for (const id of drag.group) {
+				const ex = editor.attachedExposeId(id);
+				if (ex && !drag.group.includes(ex) && !drag.extra.includes(ex)) drag.extra.push(ex);
+			}
+			for (const id of [...drag.group, ...drag.extra]) {
 				const b = editor.block(id);
 				drag.start.set(id, { x: b?.x ?? 0, y: b?.y ?? 0 });
 			}
@@ -312,7 +354,7 @@ export class CanvasController {
 			drag.py = ps.y;
 		}
 		const p = this.#toCanvas(e.clientX, e.clientY);
-		for (const id of drag.group) {
+		for (const id of [...drag.group, ...drag.extra]) {
 			const s = drag.start.get(id);
 			if (s) editor.move(id, s.x + (p.x - drag.px), s.y + (p.y - drag.py));
 		}
@@ -341,6 +383,7 @@ export class CanvasController {
 	 *  is just a move (over empty canvas or over its own current parent). */
 	#reparentTargetAt(clientX: number, clientY: number): string | null {
 		if (!this.drag) return null;
+		if (editor.isExposeBox(this.drag.id)) return null; // an exposes box can't be nested away
 		const target = this.#dropTargetAt(clientX, clientY); // excludes the dragged block + its descendants
 		if (!target) return null;
 		const currentParent = editor.parentOf(this.drag.id)?.id ?? null;
@@ -376,6 +419,13 @@ export class CanvasController {
 		if (this.addPrompt) return; // let the popup's own handlers decide
 		if (this.panning) {
 			this.panning = null;
+			return;
+		}
+		if (this.exposeDrag) {
+			const { ownerId, x, y, moved } = this.exposeDrag;
+			this.exposeDrag = null;
+			// Drop the box centred under the cursor; ignore a mere alt-click (no drag).
+			if (moved) editor.createExpose(ownerId, x - EXPOSE_DEFAULT.w / 2, y - 14);
 			return;
 		}
 		if (this.resizing) {

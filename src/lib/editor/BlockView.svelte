@@ -16,7 +16,6 @@
 	const isDragging = $derived(editor.draggingId === block.id);
 	const isDropTarget = $derived(editor.dropTarget === block.id);
 	const editingName = $derived(editor.editing?.id === block.id && editor.editing.part === "name");
-	const showComments = $derived((block.showComments ?? true) && block.comments.length > 0);
 
 	function autofocus(node: HTMLInputElement | HTMLTextAreaElement) {
 		requestAnimationFrame(() => {
@@ -56,10 +55,6 @@
 		};
 	}
 
-	function isEditingComment(i: number) {
-		return editor.editing?.id === block.id && editor.editing.part === "comment" && editor.editing.index === i;
-	}
-
 	// Every block is absolutely positioned within its container — a root inside the
 	// canvas, a nested block inside its parent's `.children` box. Coordinates are
 	// relative to that container, so the same geometry fields drive both.
@@ -87,10 +82,12 @@
 
 		<div class="title-row">
 			{#if editingName}
-				<input
+				<textarea
 					class="name-input"
+					rows="1"
 					value={block.name}
 					use:autofocus
+					use:autosize
 					onpointerdown={(e) => e.stopPropagation()}
 					oninput={(e) => editor.rename(block.id, e.currentTarget.value)}
 					onfocus={() => editor.beginTextEdit(`name:${block.id}`)}
@@ -98,56 +95,18 @@
 						if (editor.editing?.id === block.id && editor.editing.part === "name") editor.editing = null;
 					}}
 					onkeydown={(e) => {
-						if (e.key === "Enter" || e.key === "Escape") {
+						// Shift+Enter inserts a newline; plain Enter commits, Escape cancels.
+						if ((e.key === "Enter" && !e.shiftKey) || e.key === "Escape") {
 							e.preventDefault();
 							editor.editing = null;
 						}
 					}}
-				/>
+				></textarea>
 			{:else}
 				<span class="name" data-edit="name" role="textbox" tabindex="-1">{block.name || "Untitled"}</span>
 			{/if}
-
-			{#if !showComments && block.comments.length}
-				<span class="badge" title="{block.comments.length} comment(s)">💬{block.comments.length}</span>
-			{/if}
 		</div>
 	</div>
-
-	{#if showComments}
-		<div class="comments">
-			{#each block.comments as c, i (i)}
-				<div class="comment">
-					{#if isEditingComment(i)}
-						<textarea
-							rows="1"
-							value={c}
-							use:autofocus
-							use:autosize
-							onpointerdown={(e) => e.stopPropagation()}
-							oninput={(e) => editor.updateComment(block.id, i, e.currentTarget.value)}
-							onfocus={() => editor.beginTextEdit(`c:${block.id}:${i}`)}
-							onblur={() => {
-								if (editor.editing?.id === block.id && editor.editing.part === "comment" && editor.editing.index === i)
-									editor.editing = null;
-							}}
-							onkeydown={(e) => {
-								if (e.key === "Escape") editor.editing = null;
-							}}
-						></textarea>
-					{:else}
-						<span class="comment-text" data-edit="comment" data-ci={i} role="textbox" tabindex="-1">{c || "comment…"}</span>
-					{/if}
-					<button
-						class="del"
-						aria-label="Delete comment"
-						onpointerdown={(e) => e.stopPropagation()}
-						onclick={() => editor.deleteComment(block.id, i)}>×</button
-					>
-				</div>
-			{/each}
-		</div>
-	{/if}
 
 	{#if block.children.length}
 		<div class="children">
@@ -237,15 +196,10 @@
 		font-size: 13.5px;
 		color: var(--fg, #18181b);
 		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
+		/* Preserve author-entered line breaks (Shift+Enter) and wrap long lines. */
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
 		text-align: left;
-	}
-	.block:not(.root) .name,
-	.block:not(.root) .name-input {
-		font-weight: 500;
-		font-size: 12.5px;
 	}
 	.name {
 		user-select: none;
@@ -260,70 +214,11 @@
 		border-radius: 4px;
 		padding: 1px 5px;
 		font-family: inherit;
+		font-weight: inherit;
+		line-height: inherit;
 		outline: none;
-	}
-	.badge {
-		font-size: 10px;
-		color: var(--muted-fg, #a1a1aa);
-		background: var(--muted, #f4f4f5);
-		border-radius: 4px;
-		padding: 1px 5px;
-		user-select: none;
-	}
-	.comments {
-		display: flex;
-		flex-direction: column;
-		gap: 1px;
-		padding: 0 9px 6px 9px;
-	}
-	.comment {
-		display: flex;
-		align-items: flex-start;
-		gap: 4px;
-	}
-	.comment-text {
-		flex: 1;
-		font-size: 12px;
-		color: var(--muted-fg, #71717a);
-		white-space: pre-wrap;
-		word-break: break-word;
-		cursor: text;
-		min-height: 16px;
-		border-radius: 4px;
-		padding: 1px 4px;
-		margin: -1px 0;
-	}
-	.comment-text:hover {
-		background: var(--accent, #f4f4f5);
-		box-shadow: inset 0 0 0 1px var(--border, #e4e4e7);
-	}
-	.comment textarea {
-		flex: 1;
-		border: none;
-		background: #fffbeb;
 		resize: none;
-		font: inherit;
-		font-size: 12px;
-		color: #92400e;
-		padding: 2px 4px;
-		border-radius: 4px;
-		outline: none;
 		overflow: hidden;
-	}
-	.del {
-		border: none;
-		background: none;
-		color: transparent;
-		cursor: pointer;
-		font-size: 14px;
-		line-height: 1;
-		padding: 0 2px;
-	}
-	.comment:hover .del {
-		color: var(--muted-fg, #c4c4cc);
-	}
-	.del:hover {
-		color: #dc2626 !important;
 	}
 	/* Freeform container: children are absolutely positioned inside it and the box
 	   fills the remaining height of the (sized) parent block. */

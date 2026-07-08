@@ -4,6 +4,7 @@ import {
 	type Connector,
 	DIAGRAM_VERSION,
 	type Diagram,
+	type Expose,
 	type Mapping,
 	type UIElement,
 } from "./types";
@@ -12,7 +13,7 @@ export * from "./types";
 
 /** The canonical empty diagram. */
 export function emptyDiagram(): Diagram {
-	return { version: DIAGRAM_VERSION, blocks: [], connectors: [], ui: [], mappings: [] };
+	return { version: DIAGRAM_VERSION, blocks: [], connectors: [], ui: [], mappings: [], exposes: [] };
 }
 
 /** Depth-first walk over every block, with its parent (null for roots). */
@@ -67,14 +68,20 @@ export function parse(json: string): Diagram {
 }
 
 /** Upgrade an older-version diagram in place to the current shape (v3 → v4 adds
- *  the UI canvas + mappings). Returns the same object; `validate` still gates it. */
+ *  the UI canvas + mappings; v4 → v5 adds the exposes relation). Steps chain, so
+ *  a v3 save is carried all the way forward. Returns the same object; `validate`
+ *  still gates it. */
 export function migrate(raw: unknown): unknown {
 	if (typeof raw !== "object" || raw === null) return raw;
 	const d = raw as Record<string, unknown>;
 	if (d.version === 3) {
-		d.version = DIAGRAM_VERSION;
+		d.version = 4;
 		d.ui ??= [];
 		d.mappings ??= [];
+	}
+	if (d.version === 4) {
+		d.version = DIAGRAM_VERSION;
+		d.exposes ??= [];
 	}
 	return d;
 }
@@ -88,6 +95,7 @@ export function validate(raw: unknown): Diagram {
 	if (!Array.isArray(d.connectors)) throw new Error("Diagram.connectors must be an array");
 	if (!Array.isArray(d.ui)) throw new Error("Diagram.ui must be an array");
 	if (!Array.isArray(d.mappings)) throw new Error("Diagram.mappings must be an array");
+	if (!Array.isArray(d.exposes)) throw new Error("Diagram.exposes must be an array");
 
 	const ids = new Set<string>();
 	const check = (blocks: Block[]) => {
@@ -126,6 +134,19 @@ export function validate(raw: unknown): Diagram {
 		mIds.add(m.id);
 		if (!ids.has(m.blockId)) throw new Error(`Mapping ${m.id} references missing block: ${m.blockId}`);
 		if (!eIds.has(m.elementId)) throw new Error(`Mapping ${m.id} references missing UI element: ${m.elementId}`);
+	}
+
+	const xIds = new Set<string>();
+	const owners = new Set<string>();
+	for (const x of d.exposes as Expose[]) {
+		if (!x.id) throw new Error("Expose missing id");
+		if (xIds.has(x.id)) throw new Error(`Duplicate expose id: ${x.id}`);
+		xIds.add(x.id);
+		if (!ids.has(x.ownerId)) throw new Error(`Expose ${x.id} references missing owner: ${x.ownerId}`);
+		if (!ids.has(x.exposeId)) throw new Error(`Expose ${x.id} references missing box: ${x.exposeId}`);
+		if (x.ownerId === x.exposeId) throw new Error(`Expose ${x.id} owner and box are the same block`);
+		if (owners.has(x.ownerId)) throw new Error(`Block ${x.ownerId} has more than one expose`);
+		owners.add(x.ownerId);
 	}
 
 	return d as unknown as Diagram;

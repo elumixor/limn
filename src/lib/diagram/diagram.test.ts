@@ -26,13 +26,14 @@ function sample(): Diagram {
 		connectors: [{ id: "x", source: "a", target: "d", kind: "arrow" }],
 		ui: [{ id: "u1", label: "Frame", x: 0, y: 0, w: 180, h: 120 }],
 		mappings: [{ id: "m1", blockId: "a", elementId: "u1" }],
+		exposes: [],
 	};
 }
 
 describe("emptyDiagram", () => {
 	it("is a valid, versioned, empty diagram", () => {
 		const d = emptyDiagram();
-		expect(d).toEqual({ version: DIAGRAM_VERSION, blocks: [], connectors: [], ui: [], mappings: [] });
+		expect(d).toEqual({ version: DIAGRAM_VERSION, blocks: [], connectors: [], ui: [], mappings: [], exposes: [] });
 		expect(() => validate(d)).not.toThrow();
 	});
 });
@@ -117,6 +118,7 @@ describe("validate", () => {
 			connectors: [],
 			ui: [],
 			mappings: [],
+			exposes: [],
 		};
 		expect(() => validate(dupe)).toThrow(/Duplicate block id/);
 	});
@@ -127,6 +129,7 @@ describe("validate", () => {
 			connectors: [{ id: "x", source: "a", target: "ghost", kind: "arrow" }],
 			ui: [],
 			mappings: [],
+			exposes: [],
 		};
 		expect(() => validate(bad)).toThrow(/missing target/);
 	});
@@ -140,6 +143,7 @@ describe("validate", () => {
 			],
 			ui: [],
 			mappings: [],
+			exposes: [],
 		};
 		expect(() => validate(bad)).toThrow(/Duplicate connector id/);
 	});
@@ -151,6 +155,7 @@ describe("validate", () => {
 				connectors: [],
 				ui: [{ id: "u1", label: "F", x: 0, y: 0, w: 1, h: 1 }],
 				mappings: [{ id: "m1", blockId: "ghost", elementId: "u1" }],
+				exposes: [],
 			}),
 		).toThrow(/references missing block/);
 		expect(() =>
@@ -160,6 +165,7 @@ describe("validate", () => {
 				connectors: [],
 				ui: [],
 				mappings: [{ id: "m1", blockId: "a", elementId: "ghost" }],
+				exposes: [],
 			}),
 		).toThrow(/references missing UI element/);
 	});
@@ -169,5 +175,28 @@ describe("validate", () => {
 		expect(d.version).toBe(DIAGRAM_VERSION);
 		expect(d.ui).toEqual([]);
 		expect(d.mappings).toEqual([]);
+		expect(d.exposes).toEqual([]);
+	});
+	it("migrates a v4 diagram forward, adding exposes", () => {
+		const legacy = JSON.stringify({ version: 4, blocks: [block("a")], connectors: [], ui: [], mappings: [] });
+		const d = parse(legacy);
+		expect(d.version).toBe(DIAGRAM_VERSION);
+		expect(d.exposes).toEqual([]);
+	});
+	it("rejects an expose with a missing owner or box, and more than one per block", () => {
+		const base = () => ({ ...sample(), blocks: [block("a"), block("b")], connectors: [], ui: [], mappings: [] });
+		expect(() => validate({ ...base(), exposes: [{ id: "x1", ownerId: "ghost", exposeId: "b" }] })).toThrow(
+			/missing owner/,
+		);
+		expect(() => validate({ ...base(), exposes: [{ id: "x1", ownerId: "a", exposeId: "ghost" }] })).toThrow(/missing box/);
+		expect(() =>
+			validate({
+				...base(),
+				exposes: [
+					{ id: "x1", ownerId: "a", exposeId: "b" },
+					{ id: "x2", ownerId: "a", exposeId: "b" },
+				],
+			}),
+		).toThrow(/more than one expose/);
 	});
 });
