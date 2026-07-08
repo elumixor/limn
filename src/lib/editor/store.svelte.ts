@@ -379,11 +379,13 @@ class EditorStore {
 	addComment(id: string) {
 		const b = this.block(id);
 		if (!b) return;
-		this.#record();
-		b.comments.push("");
-		b.showComments = true;
+		// One comment per block: reuse the existing one, else create a single empty line.
+		if (!b.comments.length) {
+			this.#record();
+			b.comments.push("");
+		}
 		this.selectBlock(id);
-		this.editing = { id, part: "comment", index: b.comments.length - 1 };
+		this.editing = { id, part: "comment", index: 0 };
 	}
 	updateComment(id: string, index: number, text: string) {
 		const b = this.block(id);

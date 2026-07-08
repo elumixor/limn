@@ -173,16 +173,8 @@ export class CanvasController {
 
 	// ---- pointer ------------------------------------------------------------
 	onPointerDown = (e: PointerEvent) => {
-		if (e.button === 0 && e.altKey) {
-			// Alt-drag out of a root block spawns its "exposes" box; anywhere else it pans.
-			const overId = blockIdAt(e.target);
-			if (overId && editor.isRoot(overId) && !editor.isExposeBox(overId) && !editor.exposeOf(overId)) {
-				e.preventDefault();
-				const p = this.#toCanvas(e.clientX, e.clientY);
-				this.exposeDrag = { ownerId: overId, sx: e.clientX, sy: e.clientY, x: p.x, y: p.y, moved: false };
-				return;
-			}
-		}
+		// Alt-drag out of a root block spawns its "exposes" box; anywhere else it pans.
+		if (e.button === 0 && e.altKey && this.#tryStartExpose(e, blockIdAt(e.target))) return;
 		if (e.button === 1 || (e.button === 0 && e.altKey)) {
 			e.preventDefault();
 			this.panning = { sx: e.clientX, sy: e.clientY, px: editor.pan.x, py: editor.pan.y };
@@ -217,6 +209,21 @@ export class CanvasController {
 			py: 0,
 		};
 	};
+
+	/** Begin the alt-drag "exposes" gesture from a root block, if eligible. Shared by
+	 *  the plain-body path and the edge overlays (resize handles / connect dots),
+	 *  since a block's "side" is exactly where those overlays sit. Returns whether
+	 *  it started. */
+	#tryStartExpose(e: PointerEvent, id: string | null): boolean {
+		if (e.button !== 0 || !e.altKey || !id) return false;
+		if (!editor.isRoot(id) || editor.isExposeBox(id) || editor.exposeOf(id)) return false;
+		e.preventDefault();
+		e.stopPropagation();
+		const p = this.#toCanvas(e.clientX, e.clientY);
+		this.exposeDrag = { ownerId: id, sx: e.clientX, sy: e.clientY, x: p.x, y: p.y, moved: false };
+		this.hover = null;
+		return true;
+	}
 
 	/** Reveal resize/connection handles for the block under (or just outside) the cursor. */
 	#updateHover(clientX: number, clientY: number) {
@@ -510,6 +517,7 @@ export class CanvasController {
 	/** Pointer-down on a cardinal connection handle: start a connector pinned to that point. */
 	onHandleDown = (e: PointerEvent, id: string, anchor: Anchor) => {
 		if (e.button !== 0) return;
+		if (this.#tryStartExpose(e, id)) return; // alt-drag a side → exposes box, not a connector
 		e.preventDefault();
 		e.stopPropagation();
 		editor.startConnector(id, anchor);
@@ -520,6 +528,7 @@ export class CanvasController {
 	/** Pointer-down on a corner resize handle: start resizing that root block. */
 	onResizeDown = (e: PointerEvent, id: string, dir: string) => {
 		if (e.button !== 0) return;
+		if (this.#tryStartExpose(e, id)) return; // alt-drag a side → exposes box, not a resize
 		e.preventDefault();
 		e.stopPropagation();
 		editor.snapshot();
