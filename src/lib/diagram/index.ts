@@ -6,6 +6,7 @@ import {
 	type Diagram,
 	type Expose,
 	type Mapping,
+	SIDES,
 	type UIElement,
 } from "./types";
 
@@ -68,9 +69,9 @@ export function parse(json: string): Diagram {
 }
 
 /** Upgrade an older-version diagram in place to the current shape (v3 → v4 adds
- *  the UI canvas + mappings; v4 → v5 adds the exposes relation). Steps chain, so
- *  a v3 save is carried all the way forward. Returns the same object; `validate`
- *  still gates it. */
+ *  the UI canvas + mappings; v4 → v5 adds the exposes relation; v5 → v6 gives
+ *  each expose a side + extent). Steps chain, so a v3 save is carried all the
+ *  way forward. Returns the same object; `validate` still gates it. */
 export function migrate(raw: unknown): unknown {
 	if (typeof raw !== "object" || raw === null) return raw;
 	const d = raw as Record<string, unknown>;
@@ -80,8 +81,15 @@ export function migrate(raw: unknown): unknown {
 		d.mappings ??= [];
 	}
 	if (d.version === 4) {
-		d.version = DIAGRAM_VERSION;
+		d.version = 5;
 		d.exposes ??= [];
+	}
+	if (d.version === 5) {
+		d.version = DIAGRAM_VERSION;
+		for (const e of (d.exposes as Partial<Expose>[]) ?? []) {
+			e.side ??= "right";
+			e.extent ??= 120;
+		}
 	}
 	return d;
 }
@@ -147,6 +155,8 @@ export function validate(raw: unknown): Diagram {
 		if (x.ownerId === x.exposeId) throw new Error(`Expose ${x.id} owner and box are the same block`);
 		if (owners.has(x.ownerId)) throw new Error(`Block ${x.ownerId} has more than one expose`);
 		owners.add(x.ownerId);
+		if (!SIDES.includes(x.side)) throw new Error(`Expose ${x.id} has invalid side: ${x.side}`);
+		if (typeof x.extent !== "number") throw new Error(`Expose ${x.id} extent must be a number`);
 	}
 
 	return d as unknown as Diagram;

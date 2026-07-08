@@ -3,9 +3,25 @@
  * hit-zones. Everything here is a plain function of rectangles and points — no
  * DOM, no editor state — so it's cheap to reason about and unit-test.
  */
-import type { Anchor } from "../diagram";
+import type { Anchor, Side } from "../diagram";
 
 export type Rect = { x: number; y: number; w: number; h: number };
+
+/** Rect of an "exposes" panel glued to `side` of owner rect `o`, extending
+ *  outward by `extent`. It shares the owner's height (left/right) or width
+ *  (top/bottom) so it reads as growing straight out of that edge. */
+export function exposeRect(o: Rect, side: Side, extent: number): Rect {
+	switch (side) {
+		case "right":
+			return { x: o.x + o.w, y: o.y, w: extent, h: o.h };
+		case "left":
+			return { x: o.x - extent, y: o.y, w: extent, h: o.h };
+		case "bottom":
+			return { x: o.x, y: o.y + o.h, w: o.w, h: extent };
+		case "top":
+			return { x: o.x, y: o.y - extent, w: o.w, h: extent };
+	}
+}
 
 /** How far past a block's border a connection handle is pushed. */
 export const HANDLE_OFFSET = 13;

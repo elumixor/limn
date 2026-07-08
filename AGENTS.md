@@ -43,10 +43,10 @@ Two domains, kept separate:
 - `types.ts` — the data model. `Block` (recursive: `name`, `comments[]`,
   `children[]`, optional `x/y/w/h`, `showComments`), `Connector`, `UIElement`
   (a free-drawn box on the UI canvas), `Mapping` (component→UI-element link),
-  `Expose` (a "public API" section: an owner block tied to a second root block
-  holding the exposed content), `Diagram` (`blocks`, `connectors`, `ui`,
-  `mappings`, `exposes`), `Anchor`. Bump `DIAGRAM_VERSION` and migrate when the
-  shape changes.
+  `Expose` (a "public API" panel that grows flush out of an owner block's `side`,
+  sharing that dimension with a free `extent`; its content is a second root
+  block), `Diagram` (`blocks`, `connectors`, `ui`, `mappings`, `exposes`),
+  `Anchor`. Bump `DIAGRAM_VERSION` and migrate when the shape changes.
 - `index.ts` — pure tree operations: `walk`, `findBlock`, `ownerList`,
   `isAncestor`, `isRoot`, `serialize`/`parse`, `migrate` (upgrades older-version
   saves forward), and `validate` (throws on the first structural problem; the
@@ -135,7 +135,7 @@ rendering (`*.svelte`). Keep it that way:
   (`vrect`, `droptarget`, `subblock`, …). Not real findings.
 - `validate()` runs on every load and every undo/redo restore. If you add or
   rename model fields, update `validate` and the `DIAGRAM_VERSION` together.
-- `localStorage` key is `limn.diagram.v5` (older keys in `LEGACY_KEYS` are read
+- `localStorage` key is `limn.diagram.v6` (older keys in `LEGACY_KEYS` are read
   once and migrated forward via `migrate`). Bump it (and add a migration) on a
   breaking model change, or old saves will fail `validate` and silently reset to
   an empty diagram.

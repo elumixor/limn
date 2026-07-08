@@ -183,20 +183,25 @@ describe("validate", () => {
 		expect(d.version).toBe(DIAGRAM_VERSION);
 		expect(d.exposes).toEqual([]);
 	});
-	it("rejects an expose with a missing owner or box, and more than one per block", () => {
+	it("migrates a v5 expose forward, defaulting side + extent", () => {
+		const legacy = JSON.stringify({
+			version: 5,
+			blocks: [block("a"), block("b")],
+			connectors: [],
+			ui: [],
+			mappings: [],
+			exposes: [{ id: "x1", ownerId: "a", exposeId: "b" }],
+		});
+		const d = parse(legacy);
+		expect(d.version).toBe(DIAGRAM_VERSION);
+		expect(d.exposes[0]).toMatchObject({ side: "right", extent: 120 });
+	});
+	it("rejects an expose with a missing owner or box, more than one per block, or a bad side", () => {
 		const base = () => ({ ...sample(), blocks: [block("a"), block("b")], connectors: [], ui: [], mappings: [] });
-		expect(() => validate({ ...base(), exposes: [{ id: "x1", ownerId: "ghost", exposeId: "b" }] })).toThrow(
-			/missing owner/,
-		);
-		expect(() => validate({ ...base(), exposes: [{ id: "x1", ownerId: "a", exposeId: "ghost" }] })).toThrow(/missing box/);
-		expect(() =>
-			validate({
-				...base(),
-				exposes: [
-					{ id: "x1", ownerId: "a", exposeId: "b" },
-					{ id: "x2", ownerId: "a", exposeId: "b" },
-				],
-			}),
-		).toThrow(/more than one expose/);
+		const ex = (over: object) => ({ id: "x1", ownerId: "a", exposeId: "b", side: "right", extent: 120, ...over });
+		expect(() => validate({ ...base(), exposes: [ex({ ownerId: "ghost" })] })).toThrow(/missing owner/);
+		expect(() => validate({ ...base(), exposes: [ex({ exposeId: "ghost" })] })).toThrow(/missing box/);
+		expect(() => validate({ ...base(), exposes: [ex({ side: "sideways" })] })).toThrow(/invalid side/);
+		expect(() => validate({ ...base(), exposes: [ex({}), ex({ id: "x2" })] })).toThrow(/more than one expose/);
 	});
 });

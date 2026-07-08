@@ -16,6 +16,9 @@
 	const isDragging = $derived(editor.draggingId === block.id);
 	const isDropTarget = $derived(editor.dropTarget === block.id);
 	const editingName = $derived(editor.editing?.id === block.id && editor.editing.part === "name");
+	// When set, this block is a public-API panel glued to `expose.side` of its owner:
+	// it shows a fixed "exposes" header (no type/name) instead of the normal one.
+	const expose = $derived(editor.exposeByBox(block.id));
 
 	function autofocus(node: HTMLInputElement | HTMLTextAreaElement) {
 		requestAnimationFrame(() => {
@@ -73,40 +76,70 @@
 	class:dragging={isDragging}
 	class:droptarget={isDropTarget}
 	class:linking={editor.pendingConnector === block.id}
+	class:expose={!!expose}
+	class:expose-right={expose?.side === "right"}
+	class:expose-left={expose?.side === "left"}
+	class:expose-top={expose?.side === "top"}
+	class:expose-bottom={expose?.side === "bottom"}
 	data-block-id={block.id}
 	style={boxStyle(block)}
 	use:measure
 >
-	<div class="head">
-		<BlockTypeSelect {block} />
-
-		<div class="title-row">
-			{#if editingName}
-				<textarea
-					class="name-input"
-					rows="1"
-					value={block.name}
-					use:autofocus
-					use:autosize
-					onpointerdown={(e) => e.stopPropagation()}
-					oninput={(e) => editor.rename(block.id, e.currentTarget.value)}
-					onfocus={() => editor.beginTextEdit(`name:${block.id}`)}
-					onblur={() => {
-						if (editor.editing?.id === block.id && editor.editing.part === "name") editor.editing = null;
-					}}
-					onkeydown={(e) => {
-						// Shift+Enter inserts a newline; plain Enter commits, Escape cancels.
-						if ((e.key === "Enter" && !e.shiftKey) || e.key === "Escape") {
-							e.preventDefault();
-							editor.editing = null;
-						}
-					}}
-				></textarea>
-			{:else}
-				<span class="name" data-edit="name" role="textbox" tabindex="-1">{block.name || "Untitled"}</span>
-			{/if}
+	{#if expose}
+		<!-- Public-API panel: fixed icon + "exposes" label, no type select or name. -->
+		<div class="head expose-header">
+			<svg
+				class="expose-glyph"
+				viewBox="0 0 24 24"
+				width="13"
+				height="13"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+				aria-hidden="true"
+			>
+				<path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9" />
+				<path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5" />
+				<circle cx="12" cy="12" r="2" />
+				<path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5" />
+				<path d="M19.1 4.9C23 8.8 23 15.1 19.1 19" />
+			</svg>
+			<span class="expose-label">exposes</span>
 		</div>
-	</div>
+	{:else}
+		<div class="head">
+			<BlockTypeSelect {block} />
+
+			<div class="title-row">
+				{#if editingName}
+					<textarea
+						class="name-input"
+						rows="1"
+						value={block.name}
+						use:autofocus
+						use:autosize
+						onpointerdown={(e) => e.stopPropagation()}
+						oninput={(e) => editor.rename(block.id, e.currentTarget.value)}
+						onfocus={() => editor.beginTextEdit(`name:${block.id}`)}
+						onblur={() => {
+							if (editor.editing?.id === block.id && editor.editing.part === "name") editor.editing = null;
+						}}
+						onkeydown={(e) => {
+							// Shift+Enter inserts a newline; plain Enter commits, Escape cancels.
+							if ((e.key === "Enter" && !e.shiftKey) || e.key === "Escape") {
+								e.preventDefault();
+								editor.editing = null;
+							}
+						}}
+					></textarea>
+				{:else}
+					<span class="name" data-edit="name" role="textbox" tabindex="-1">{block.name || "Untitled"}</span>
+				{/if}
+			</div>
+		</div>
+	{/if}
 
 	{#if block.children.length}
 		<div class="children">
@@ -181,6 +214,45 @@
 		gap: 4px;
 		padding: 7px 9px;
 		position: relative;
+	}
+	/* Exposes panel: muted fill, flattened where it meets its owner, fixed header. */
+	.block.expose {
+		background: var(--muted, #f7f7f8);
+		box-shadow: none;
+	}
+	.block.expose.selected {
+		box-shadow: 0 0 0 2px var(--ring, #18181b);
+	}
+	.block.expose-right {
+		border-top-left-radius: 0;
+		border-bottom-left-radius: 0;
+	}
+	.block.expose-left {
+		border-top-right-radius: 0;
+		border-bottom-right-radius: 0;
+	}
+	.block.expose-top {
+		border-bottom-left-radius: 0;
+		border-bottom-right-radius: 0;
+	}
+	.block.expose-bottom {
+		border-top-left-radius: 0;
+		border-top-right-radius: 0;
+	}
+	.expose-header {
+		flex-direction: row;
+		align-items: center;
+		gap: 5px;
+		color: #db2777;
+	}
+	.expose-glyph {
+		flex: none;
+	}
+	.expose-label {
+		font-size: 11px;
+		font-weight: 600;
+		letter-spacing: 0.02em;
+		user-select: none;
 	}
 	.title-row {
 		display: flex;

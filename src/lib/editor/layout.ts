@@ -19,8 +19,9 @@ export const MIN_PARENT_H = 96;
 export const FIT_SLACK = 12;
 /** Fallback size for a root block whose DOM size hasn't been measured yet. */
 export const DEFAULT_ROOT_SIZE = { w: 180, h: 56 } as const;
-/** Size of a freshly created "exposes" box (also drives its drag-out ghost). */
-export const EXPOSE_DEFAULT = { w: 170, h: 60 } as const;
+/** Free (perpendicular) dimension of a freshly created "exposes" panel, and its floor. */
+export const EXPOSE_DEFAULT_EXTENT = 120;
+export const EXPOSE_MIN_EXTENT = 44;
 
 /** Far right/bottom edge occupied by a block's direct children, in parent-local coords. */
 export function childrenExtent(children: Block[]): { right: number; bottom: number } {

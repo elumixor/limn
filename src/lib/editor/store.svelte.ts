@@ -15,24 +15,30 @@ import {
 	migrate,
 	ownerList,
 	serialize,
+	type Side,
 	type UIElement,
 	validate,
 } from "../diagram";
+import { exposeRect, type Rect } from "./geometry";
 import { History } from "./history";
 import {
+	childrenExtent,
 	DEFAULT_CHILD_H,
 	DEFAULT_CHILD_W,
+	DEFAULT_ROOT_SIZE,
 	descendantIds,
-	EXPOSE_DEFAULT,
+	EXPOSE_MIN_EXTENT,
+	FIT_SLACK,
 	fitToChildren,
+	HEADER_ALLOW,
 	NEST_GAP,
 	NEST_INSET,
 	nextChildY,
 } from "./layout";
 
-const STORAGE_KEY = "limn.diagram.v5";
+const STORAGE_KEY = "limn.diagram.v6";
 /** Previous keys — read once and migrated forward so existing local diagrams survive version bumps. */
-const LEGACY_KEYS = ["limn.diagram.v4", "limn.diagram.v3"] as const;
+const LEGACY_KEYS = ["limn.diagram.v5", "limn.diagram.v4", "limn.diagram.v3"] as const;
 
 /** Default size of a freshly drawn UI element. */
 const DEFAULT_UI_SIZE = { w: 180, h: 120 } as const;
@@ -261,6 +267,8 @@ class EditorStore {
 
 	/** Grow a block so it contains all its children, then cascade up its ancestry. */
 	#fit(b: Block) {
+		// An exposes panel is sized by its owner (see `syncExposes`), not its children.
+		if (this.isExposeBox(b.id)) return;
 		fitToChildren(b);
 		const parent = this.parentOf(b.id);
 		if (parent) this.#fit(parent);
@@ -544,29 +552,66 @@ class EditorStore {
 	exposeOf(ownerId: string): Expose | undefined {
 		return this.diagram.exposes.find((e) => e.ownerId === ownerId);
 	}
-	/** The root-block id of a block's exposes box, if it has one. */
-	attachedExposeId(ownerId: string): string | undefined {
-		return this.exposeOf(ownerId)?.exposeId;
+	/** The expose relation whose content box is `id`, if any. */
+	exposeByBox(id: string): Expose | undefined {
+		return this.diagram.exposes.find((e) => e.exposeId === id);
 	}
-	/** True when `id` is the content box of some expose (so it moves with its owner). */
+	/** True when `id` is the content box of some expose (glued to its owner). */
 	isExposeBox(id: string): boolean {
 		return this.diagram.exposes.some((e) => e.exposeId === id);
 	}
-	/** Attach a public-API section to a root block. No-op if it already has one.
-	 *  The box is a full root block (named "exposes") placed at the drop point. */
-	createExpose(ownerId: string, x: number, y: number): Block | undefined {
+	/** Display rect of a root block (stored geometry, measured-size fallback). */
+	rootRect(id: string): Rect | undefined {
+		const b = this.block(id);
+		if (!b) return;
+		const s = this.sizes.get(id) ?? DEFAULT_ROOT_SIZE;
+		return { x: b.x ?? 0, y: b.y ?? 0, w: b.w ?? s.w, h: b.h ?? s.h };
+	}
+	/** The canvas rect an exposes box must occupy: glued to its owner's side,
+	 *  sharing that dimension, extending by the free extent (grown to fit children). */
+	exposeGeometry(e: Expose): Rect | undefined {
+		const box = this.block(e.exposeId);
+		const o = this.rootRect(e.ownerId);
+		if (!box || !o) return;
+		return exposeRect(o, e.side, this.#effectiveExtent(box, e.side, e.extent));
+	}
+	/** The free dimension actually used: the larger of the user's extent and what
+	 *  the panel's children need along that axis, so adding content grows it out. */
+	#effectiveExtent(box: Block, side: Side, extent: number): number {
+		if (!box.children.length) return Math.max(EXPOSE_MIN_EXTENT, extent);
+		const { right, bottom } = childrenExtent(box.children);
+		const need = side === "left" || side === "right" ? right + NEST_INSET + FIT_SLACK : bottom + HEADER_ALLOW;
+		return Math.max(EXPOSE_MIN_EXTENT, extent, need);
+	}
+	/** Attach a public-API panel growing from `side` of a root block. No-op if it
+	 *  already has one. The panel is a root block named "exposes" whose geometry is
+	 *  derived from its owner (kept glued by `syncExposes`). */
+	createExpose(ownerId: string, side: Side, extent: number): Block | undefined {
 		if (!this.isRoot(ownerId) || this.exposeOf(ownerId)) return;
 		this.#record();
 		const b = newBlock("exposes");
-		b.x = x;
-		b.y = y;
-		b.w = EXPOSE_DEFAULT.w;
-		b.h = EXPOSE_DEFAULT.h;
 		this.diagram.blocks.push(b);
-		this.diagram.exposes.push({ id: uid("x"), ownerId, exposeId: b.id });
+		const e: Expose = { id: uid("x"), ownerId, exposeId: b.id, side, extent: Math.max(EXPOSE_MIN_EXTENT, extent) };
+		this.diagram.exposes.push(e);
+		const geo = this.exposeGeometry(e); // seed geometry so it renders before the effect runs
+		if (geo) Object.assign(b, geo);
 		this.selectBlock(b.id);
-		this.editing = { id: b.id, part: "name" };
 		return b;
+	}
+	/** Resize an exposes panel's free dimension (its width or height). */
+	setExposeExtent(exposeId: string, extent: number) {
+		const e = this.exposeByBox(exposeId);
+		if (e) e.extent = Math.max(EXPOSE_MIN_EXTENT, Math.round(extent));
+	}
+	/** Re-glue every exposes box to its owner. Driven by a reactive effect so a
+	 *  panel tracks its owner's moves/resizes and its own children's growth. */
+	syncExposes() {
+		for (const e of this.diagram.exposes) {
+			const box = this.block(e.exposeId);
+			const geo = this.exposeGeometry(e);
+			if (!box || !geo) continue;
+			if (box.x !== geo.x || box.y !== geo.y || box.w !== geo.w || box.h !== geo.h) Object.assign(box, geo);
+		}
 	}
 
 	// ---- keyboard-driven ops ------------------------------------------------
@@ -644,6 +689,11 @@ export const editor = new EditorStore();
 
 if (typeof window !== "undefined") {
 	$effect.root(() => {
+		// Keep every exposes panel glued to its owner as the owner moves/resizes or
+		// the panel's children grow. Runs before the autosave effect sees the change.
+		$effect(() => {
+			editor.syncExposes();
+		});
 		$effect(() => {
 			localStorage.setItem(STORAGE_KEY, serialize(editor.diagram));
 		});

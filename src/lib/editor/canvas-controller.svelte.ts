@@ -5,16 +5,17 @@
  * nested blocks. The component (`Canvas.svelte`) is left as markup that reads
  * this state and forwards events here.
  */
-import type { Anchor, Block, Connector } from "../diagram";
+import type { Anchor, Block, Connector, Side } from "../diagram";
 import type { MenuItem } from "./ContextMenu.svelte";
 import { blockIdAt, isTextInput } from "./dom";
-import { connectorGeo, type Geo, nearestCardinal, type Rect } from "./geometry";
+import { center, connectorGeo, exposeRect, type Geo, nearestCardinal, type Rect } from "./geometry";
 import {
 	childrenExtent,
 	DEFAULT_CHILD_H,
 	DEFAULT_CHILD_W,
 	DEFAULT_ROOT_SIZE,
-	EXPOSE_DEFAULT,
+	EXPOSE_DEFAULT_EXTENT,
+	EXPOSE_MIN_EXTENT,
 	HEADER_ALLOW,
 	NEST_INSET,
 } from "./layout";
@@ -41,9 +42,6 @@ type Drag = {
 	sy: number;
 	moving: boolean;
 	group: string[];
-	/** Attached exposes boxes dragged along with `group`, kept out of it so the
-	 *  nest/detach logic (which keys off `group.length === 1`) is unaffected. */
-	extra: string[];
 	start: Map<string, { x: number; y: number }>;
 	px: number;
 	py: number;
@@ -73,9 +71,11 @@ export class CanvasController {
 	} | null>(null);
 	/** In-place "create a block here" prompt, shown when a connector is dropped on empty space. */
 	addPrompt = $state<{ x: number; y: number } | null>(null);
-	/** Alt-drag out of a block's side to attach a public-API ("exposes") box.
-	 *  `x`/`y` follow the cursor in canvas space; the box is created on release. */
-	exposeDrag = $state<{ ownerId: string; sx: number; sy: number; x: number; y: number; moved: boolean } | null>(null);
+	/** Alt-drag out of a block's side to grow a public-API ("exposes") panel. `side`
+	 *  and `extent` follow the cursor; `rect` is the live preview; created on release. */
+	exposeDrag = $state<{ ownerId: string; side: Side; extent: number; rect: Rect; moved: boolean; sx: number; sy: number } | null>(null);
+	/** Dragging the outer edge of an exposes panel to resize its free dimension. */
+	exposeResize = $state<{ exposeId: string; side: Side; startExtent: number; sx: number; sy: number } | null>(null);
 	// Transient, handler-only drag state: never read in markup, so it's declared
 	// raw to avoid both the spurious "not reactive" warning and proxy overhead on
 	// the pointermove hot path.
@@ -139,10 +139,6 @@ export class CanvasController {
 	geo(c: Connector): Geo {
 		return connectorGeo(this.canvasRect(c.source), this.canvasRect(c.target), c.sourceAnchor, c.targetAnchor);
 	}
-	/** Geometry of an expose's attachment line, border-to-border between owner and box. */
-	exposeGeo(ownerId: string, exposeId: string): Geo {
-		return connectorGeo(this.canvasRect(ownerId), this.canvasRect(exposeId));
-	}
 
 	/** Inner content box of a nested block's parent, in which the block must stay. Null for roots. */
 	#parentInner(id: string): { w: number; h: number } | null {
@@ -203,7 +199,6 @@ export class CanvasController {
 			sy: e.clientY,
 			moving: false,
 			group: [],
-			extra: [],
 			start: new Map(),
 			px: 0,
 			py: 0,
@@ -219,10 +214,30 @@ export class CanvasController {
 		if (!editor.isRoot(id) || editor.isExposeBox(id) || editor.exposeOf(id)) return false;
 		e.preventDefault();
 		e.stopPropagation();
-		const p = this.#toCanvas(e.clientX, e.clientY);
-		this.exposeDrag = { ownerId: id, sx: e.clientX, sy: e.clientY, x: p.x, y: p.y, moved: false };
+		const shape = this.#exposeShape(id, this.#toCanvas(e.clientX, e.clientY));
+		this.exposeDrag = { ownerId: id, ...shape, moved: false, sx: e.clientX, sy: e.clientY };
 		this.hover = null;
 		return true;
+	}
+
+	/** Which side the cursor is pulling toward and how far past the owner's edge —
+	 *  the panel grows straight out of that side. */
+	#exposeShape(ownerId: string, cursor: { x: number; y: number }): { side: Side; extent: number; rect: Rect } {
+		const o = this.rect(ownerId);
+		const c = center(o);
+		const dx = cursor.x - c.x;
+		const dy = cursor.y - c.y;
+		const side: Side = Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? "right" : "left") : dy >= 0 ? "bottom" : "top";
+		const past =
+			side === "right"
+				? cursor.x - (o.x + o.w)
+				: side === "left"
+					? o.x - cursor.x
+					: side === "bottom"
+						? cursor.y - (o.y + o.h)
+						: o.y - cursor.y;
+		const extent = Math.max(EXPOSE_MIN_EXTENT, past);
+		return { side, extent, rect: exposeRect(o, side, extent) };
 	}
 
 	/** Reveal resize/connection handles for the block under (or just outside) the cursor. */
@@ -265,9 +280,15 @@ export class CanvasController {
 			return;
 		}
 		if (this.exposeDrag) {
-			const p = this.#toCanvas(e.clientX, e.clientY);
+			const shape = this.#exposeShape(this.exposeDrag.ownerId, this.#toCanvas(e.clientX, e.clientY));
 			const moved = this.exposeDrag.moved || Math.hypot(e.clientX - this.exposeDrag.sx, e.clientY - this.exposeDrag.sy) >= THRESHOLD;
-			this.exposeDrag = { ...this.exposeDrag, x: p.x, y: p.y, moved };
+			this.exposeDrag = { ...this.exposeDrag, ...shape, moved };
+			return;
+		}
+		if (this.exposeResize) {
+			const { side, startExtent, sx, sy } = this.exposeResize;
+			const d = side === "right" ? e.clientX - sx : side === "left" ? sx - e.clientX : side === "bottom" ? e.clientY - sy : sy - e.clientY;
+			editor.setExposeExtent(this.exposeResize.exposeId, startExtent + d);
 			return;
 		}
 		if (this.resizing) {
@@ -330,6 +351,8 @@ export class CanvasController {
 		}
 		this.hover = null;
 		const drag = this.drag;
+		// An exposes panel is glued to its owner — it selects on click but never moves.
+		if (editor.isExposeBox(drag.id)) return;
 		if (!drag.moving) {
 			if (Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < THRESHOLD) return;
 			drag.moving = true;
@@ -344,14 +367,7 @@ export class CanvasController {
 				editor.selectBlock(drag.id);
 				drag.group = [drag.id];
 			}
-			// Each moved block's owner drags its attached exposes box along, so the
-			// box keeps its position relative to the owner.
-			drag.extra = [];
 			for (const id of drag.group) {
-				const ex = editor.attachedExposeId(id);
-				if (ex && !drag.group.includes(ex) && !drag.extra.includes(ex)) drag.extra.push(ex);
-			}
-			for (const id of [...drag.group, ...drag.extra]) {
 				const b = editor.block(id);
 				drag.start.set(id, { x: b?.x ?? 0, y: b?.y ?? 0 });
 			}
@@ -361,7 +377,7 @@ export class CanvasController {
 			drag.py = ps.y;
 		}
 		const p = this.#toCanvas(e.clientX, e.clientY);
-		for (const id of [...drag.group, ...drag.extra]) {
+		for (const id of drag.group) {
 			const s = drag.start.get(id);
 			if (s) editor.move(id, s.x + (p.x - drag.px), s.y + (p.y - drag.py));
 		}
@@ -429,10 +445,15 @@ export class CanvasController {
 			return;
 		}
 		if (this.exposeDrag) {
-			const { ownerId, x, y, moved } = this.exposeDrag;
+			const { ownerId, side, extent, moved } = this.exposeDrag;
 			this.exposeDrag = null;
-			// Drop the box centred under the cursor; ignore a mere alt-click (no drag).
-			if (moved) editor.createExpose(ownerId, x - EXPOSE_DEFAULT.w / 2, y - 14);
+			// The panel's free dimension is however far you dragged past the edge
+			// (floored); ignore a mere alt-click with no drag.
+			if (moved) editor.createExpose(ownerId, side, Math.max(EXPOSE_DEFAULT_EXTENT, extent));
+			return;
+		}
+		if (this.exposeResize) {
+			this.exposeResize = null;
 			return;
 		}
 		if (this.resizing) {
@@ -529,6 +550,18 @@ export class CanvasController {
 	onResizeDown = (e: PointerEvent, id: string, dir: string) => {
 		if (e.button !== 0) return;
 		if (this.#tryStartExpose(e, id)) return; // alt-drag a side → exposes box, not a resize
+		// An exposes panel only resizes along its free dimension — grab its outer edge.
+		if (editor.isExposeBox(id)) {
+			const ex = editor.exposeByBox(id);
+			if (!ex) return;
+			const outer = ex.side === "right" ? "e" : ex.side === "left" ? "w" : ex.side === "bottom" ? "s" : "n";
+			if (!dir.includes(outer)) return;
+			e.preventDefault();
+			e.stopPropagation();
+			editor.snapshot();
+			this.exposeResize = { exposeId: id, side: ex.side, startExtent: ex.extent, sx: e.clientX, sy: e.clientY };
+			return;
+		}
 		e.preventDefault();
 		e.stopPropagation();
 		editor.snapshot();

@@ -12,7 +12,7 @@
  * Plain JSON: `JSON.parse(JSON.stringify(diagram))` round-trips losslessly.
  */
 
-export const DIAGRAM_VERSION = 5 as const;
+export const DIAGRAM_VERSION = 6 as const;
 
 /**
  * What a block represents. Purely semantic — it changes the icon/label shown in
@@ -96,18 +96,28 @@ export interface Mapping {
 	elementId: string;
 }
 
+/** Which side of a block something attaches to. */
+export const SIDES = ["top", "right", "bottom", "left"] as const;
+export type Side = (typeof SIDES)[number];
+
 /**
- * A "public API" section attached to a block. The exposed content is itself a
- * full root block (`exposeId`) — free to hold a name, comments, and children —
- * tied to its owner (`ownerId`) by this relation, which draws the attachment
- * line and keeps the box moving with its owner. At most one per owner.
+ * A "public API" section that grows out of one side of a block. The exposed
+ * content is itself a root block (`exposeId`) holding the exposed children,
+ * glued flush to its owner (`ownerId`) on `side`: it shares the owner's height
+ * (left/right) or width (top/bottom), and `extent` is the free perpendicular
+ * dimension (its width when on the left/right, its height on top/bottom). Its
+ * geometry is fully derived from the owner — it never floats free. One per owner.
  */
 export interface Expose {
 	id: string;
 	/** The block whose public API this is. */
 	ownerId: string;
-	/** Root block holding the exposed content (defaults to a box named "exposes"). */
+	/** Root block holding the exposed content. */
 	exposeId: string;
+	/** Side of the owner it grows from. */
+	side: Side;
+	/** Free dimension: width when `side` is left/right, height when top/bottom. */
+	extent: number;
 }
 
 export interface Diagram {
