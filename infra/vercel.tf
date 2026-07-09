@@ -1,9 +1,16 @@
-# Vercel project for the SvelteKit app. Deploys are driven by GitHub Actions
-# (Vercel CLI), so the Git integration is intentionally left disconnected to
-# avoid double deploys.
+# Vercel project for the SvelteKit app, connected to the GitHub repo so pushes
+# create deployments directly through Vercel's Git integration.
 resource "vercel_project" "limn" {
   name      = var.project_name
   framework = "sveltekit"
+
+  # Connect the GitHub repo. Vercel builds on push to any branch and promotes
+  # the production branch (main) automatically.
+  git_repository = {
+    type              = "github"
+    repo              = "${var.github_owner}/${var.github_repo}"
+    production_branch = "main"
+  }
 
   # Build settings are auto-detected from the SvelteKit project; adapter-auto
   # resolves to @sveltejs/adapter-vercel when building in CI.

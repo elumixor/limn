@@ -4,7 +4,8 @@
 	"version": "0.0.1",
 	"type": "module",
 	"scripts": {
-		"dev": "vite dev",
+		"dev": "devkit dev",
+		"dev:open": "devkit dev --open",
 		"build": "vite build",
 		"preview": "vite preview",
 		"test": "vitest run --passWithNoTests",
@@ -13,7 +14,13 @@
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
 	},
+	"devkit": {
+		"apps": [
+			{ "name": "limn", "command": "vite dev", "port": 5173, "color": "magenta", "open": true }
+		]
+	},
 	"devDependencies": {
+		"@elumixor/devkit": "github:elumixor/devkit#v0.1.1",
 		"@sveltejs/adapter-auto": "^7.0.1",
 		"@sveltejs/kit": "^2.63.0",
 		"@sveltejs/vite-plugin-svelte": "^7.1.2",
