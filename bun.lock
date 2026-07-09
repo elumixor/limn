@@ -5,7 +5,7 @@
     "": {
       "name": "limn",
       "devDependencies": {
-        "@elumixor/devkit": "github:elumixor/devkit#v0.1.1",
+        "@elumixor/devkit": "^0.1.2",
         "@sveltejs/adapter-auto": "^7.0.1",
         "@sveltejs/kit": "^2.63.0",
         "@sveltejs/vite-plugin-svelte": "^7.1.2",
@@ -18,7 +18,7 @@
     },
   },
   "packages": {
-    "@elumixor/devkit": ["@elumixor/devkit@github:elumixor/devkit#5e5565d", { "dependencies": { "concurrently": "^10.0.3" }, "bin": { "devkit": "./src/bin/devkit.ts", "free-port": "./src/bin/free-port.ts" } }, "elumixor-devkit-5e5565d"],
+    "@elumixor/devkit": ["@elumixor/devkit@0.1.2", "", { "dependencies": { "concurrently": "^10.0.3" }, "bin": { "devkit": "src/bin/devkit.ts", "free-port": "src/bin/free-port.ts" } }, "sha512-2ZrPxhFs3TW8TCYcbIGty+L5u9Cxs1CWMWEkNhW6D9zFwNwCDzyNY8XURjQmpv4OJepWQncTxgefHRxrR4XXaw=="],
 
     "@emnapi/core": ["@emnapi/core@1.11.1", "", { "dependencies": { "@emnapi/wasi-threads": "1.2.2", "tslib": "^2.4.0" } }, "sha512-RSvbQmHzdKzNsLYa/wHrbc3KN4sYLKAdPZxqiM2HATqv/SBk2/ENSHpvXGaLOMcsAyz0poEGqkmmKYG3OWiJEQ=="],
 
