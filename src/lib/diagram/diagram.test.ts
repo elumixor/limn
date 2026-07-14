@@ -18,19 +18,22 @@ function block(id: string, children: Block[] = []): Block {
 	return { id, name: id, comments: [], children };
 }
 
-/** a → (b → c), d  plus one connector a→d. */
+/** a → (b → c), d  plus one connector a→d and a UI frame mapped to a. */
 function sample(): Diagram {
 	return {
 		version: DIAGRAM_VERSION,
 		blocks: [block("a", [block("b", [block("c")])]), block("d")],
 		connectors: [{ id: "x", source: "a", target: "d", kind: "arrow" }],
+		ui: [{ id: "u1", label: "Frame", x: 0, y: 0, w: 180, h: 120 }],
+		mappings: [{ id: "m1", blockId: "a", elementId: "u1" }],
+		exposes: [],
 	};
 }
 
 describe("emptyDiagram", () => {
 	it("is a valid, versioned, empty diagram", () => {
 		const d = emptyDiagram();
-		expect(d).toEqual({ version: DIAGRAM_VERSION, blocks: [], connectors: [] });
+		expect(d).toEqual({ version: DIAGRAM_VERSION, blocks: [], connectors: [], ui: [], mappings: [], exposes: [] });
 		expect(() => validate(d)).not.toThrow();
 	});
 });
@@ -113,6 +116,9 @@ describe("validate", () => {
 			version: DIAGRAM_VERSION,
 			blocks: [block("a", [block("a")])],
 			connectors: [],
+			ui: [],
+			mappings: [],
+			exposes: [],
 		};
 		expect(() => validate(dupe)).toThrow(/Duplicate block id/);
 	});
@@ -121,6 +127,9 @@ describe("validate", () => {
 			version: DIAGRAM_VERSION,
 			blocks: [block("a")],
 			connectors: [{ id: "x", source: "a", target: "ghost", kind: "arrow" }],
+			ui: [],
+			mappings: [],
+			exposes: [],
 		};
 		expect(() => validate(bad)).toThrow(/missing target/);
 	});
@@ -132,7 +141,67 @@ describe("validate", () => {
 				{ id: "x", source: "a", target: "b", kind: "arrow" },
 				{ id: "x", source: "b", target: "a", kind: "arrow" },
 			],
+			ui: [],
+			mappings: [],
+			exposes: [],
 		};
 		expect(() => validate(bad)).toThrow(/Duplicate connector id/);
+	});
+	it("rejects mappings that reference a missing block or element", () => {
+		expect(() =>
+			validate({
+				version: DIAGRAM_VERSION,
+				blocks: [block("a")],
+				connectors: [],
+				ui: [{ id: "u1", label: "F", x: 0, y: 0, w: 1, h: 1 }],
+				mappings: [{ id: "m1", blockId: "ghost", elementId: "u1" }],
+				exposes: [],
+			}),
+		).toThrow(/references missing block/);
+		expect(() =>
+			validate({
+				version: DIAGRAM_VERSION,
+				blocks: [block("a")],
+				connectors: [],
+				ui: [],
+				mappings: [{ id: "m1", blockId: "a", elementId: "ghost" }],
+				exposes: [],
+			}),
+		).toThrow(/references missing UI element/);
+	});
+	it("migrates a v3 diagram forward when parsing", () => {
+		const legacy = JSON.stringify({ version: 3, blocks: [block("a")], connectors: [] });
+		const d = parse(legacy);
+		expect(d.version).toBe(DIAGRAM_VERSION);
+		expect(d.ui).toEqual([]);
+		expect(d.mappings).toEqual([]);
+		expect(d.exposes).toEqual([]);
+	});
+	it("migrates a v4 diagram forward, adding exposes", () => {
+		const legacy = JSON.stringify({ version: 4, blocks: [block("a")], connectors: [], ui: [], mappings: [] });
+		const d = parse(legacy);
+		expect(d.version).toBe(DIAGRAM_VERSION);
+		expect(d.exposes).toEqual([]);
+	});
+	it("migrates a v5 expose forward, defaulting side + extent", () => {
+		const legacy = JSON.stringify({
+			version: 5,
+			blocks: [block("a"), block("b")],
+			connectors: [],
+			ui: [],
+			mappings: [],
+			exposes: [{ id: "x1", ownerId: "a", exposeId: "b" }],
+		});
+		const d = parse(legacy);
+		expect(d.version).toBe(DIAGRAM_VERSION);
+		expect(d.exposes[0]).toMatchObject({ side: "right", extent: 120 });
+	});
+	it("rejects an expose with a missing owner or box, more than one per block, or a bad side", () => {
+		const base = () => ({ ...sample(), blocks: [block("a"), block("b")], connectors: [], ui: [], mappings: [] });
+		const ex = (over: object) => ({ id: "x1", ownerId: "a", exposeId: "b", side: "right", extent: 120, ...over });
+		expect(() => validate({ ...base(), exposes: [ex({ ownerId: "ghost" })] })).toThrow(/missing owner/);
+		expect(() => validate({ ...base(), exposes: [ex({ exposeId: "ghost" })] })).toThrow(/missing box/);
+		expect(() => validate({ ...base(), exposes: [ex({ side: "sideways" })] })).toThrow(/invalid side/);
+		expect(() => validate({ ...base(), exposes: [ex({}), ex({ id: "x2" })] })).toThrow(/more than one expose/);
 	});
 });

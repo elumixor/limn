@@ -9,7 +9,7 @@ import type { BlockType } from "../diagram";
 export interface BlockTypeMeta {
 	label: string;
 	color: string;
-	icon: "component" | "package" | "braces" | "database";
+	icon: "component" | "package" | "braces" | "database" | "external";
 }
 
 export const BLOCK_TYPE_META: Record<BlockType, BlockTypeMeta> = {
@@ -17,4 +17,5 @@ export const BLOCK_TYPE_META: Record<BlockType, BlockTypeMeta> = {
 	module: { label: "Module", color: "#0ea5e9", icon: "package" },
 	data: { label: "Data", color: "#16a34a", icon: "braces" },
 	database: { label: "Database", color: "#d97706", icon: "database" },
+	external: { label: "External", color: "#db2777", icon: "external" },
 };

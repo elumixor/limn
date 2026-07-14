@@ -1,13 +1,27 @@
 <script lang="ts">
-	import type { Connector } from "../diagram";
+	import { type Block, type Connector, walk } from "../diagram";
 	import { editor } from "./store.svelte";
 	import BlockView from "./BlockView.svelte";
+	import CommentBubble from "./CommentBubble.svelte";
 	import ContextMenu from "./ContextMenu.svelte";
 	import { CanvasController } from "./canvas-controller.svelte";
 	import { anchorDir, anchorPoint, CARDINALS, curve, curveMid, handlePoint, pickCardinal, resizeCursor, resizeZones } from "./geometry";
 
 	let viewport: HTMLDivElement | undefined = $state();
 	const ctl = new CanvasController(() => viewport);
+
+	/** Blocks that have comments (at any depth) — each gets a floating bubble. */
+	function commentedBlocks(): Block[] {
+		const out: Block[] = [];
+		walk(editor.diagram.blocks, (b) => {
+			if (b.comments.length) out.push(b);
+		});
+		return out;
+	}
+	/** Resolved bubble offset for a block (its stored `commentPos`, else just below it). */
+	function bubbleOffset(b: Block, rectH: number): { x: number; y: number } {
+		return b.commentPos ?? { x: 0, y: rectH + 10 };
+	}
 
 	function autofocusBtn(node: HTMLButtonElement) {
 		requestAnimationFrame(() => node.focus());
@@ -165,6 +179,19 @@
 			{/each}
 		</svg>
 
+		<!-- Comment bubbles: each commented block's notes float beside it. -->
+		{#each commentedBlocks() as b (b.id)}
+			{@const r = ctl.canvasRect(b.id)}
+			{@const off = bubbleOffset(b, r.h)}
+			<CommentBubble block={b} left={r.x + off.x} top={r.y + off.y} offset={off} />
+		{/each}
+
+		<!-- Ghost of the "exposes" panel being grown out of a block's side. -->
+		{#if ctl.exposeDrag}
+			{@const r = ctl.exposeDrag.rect}
+			<div class="expose-ghost" style="left:{r.x}px; top:{r.y}px; width:{r.w}px; height:{r.h}px">exposes</div>
+		{/if}
+
 		<!-- Draggable endpoints of the selected connector -->
 		{#if editor.selectedConnector}
 			{@const c = editor.connector(editor.selectedConnector)}
@@ -298,8 +325,15 @@
 	}
 	.conn-desc {
 		position: absolute;
+		/* Above the `edges-top` layer (which draws nested-connector lines over blocks)
+		   so the label's opaque background isn't overdrawn by its own arrow. */
+		z-index: 4;
 		transform: translate(-50%, -50%);
-		width: 110px;
+		/* Size the box to its text (with a floor so the placeholder fits) instead of
+		   a fixed width, so the background hugs the label. */
+		field-sizing: content;
+		min-width: 60px;
+		max-width: 220px;
 		text-align: center;
 		font-size: 11px;
 		border: 1px solid var(--border, #e4e4e7);
@@ -370,6 +404,21 @@
 	.add-prompt:hover {
 		background: #6366f1;
 		color: #fff;
+	}
+	.expose-ghost {
+		position: absolute;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		box-sizing: border-box;
+		border: 1.5px dashed #db2777;
+		border-radius: 9px;
+		background: rgb(219 39 119 / 0.06);
+		color: #db2777;
+		font-size: 13px;
+		font-weight: 600;
+		pointer-events: none;
+		z-index: 5;
 	}
 	.marquee {
 		position: absolute;

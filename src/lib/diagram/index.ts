@@ -1,10 +1,20 @@
-import { type Block, BLOCK_TYPES, type Connector, DIAGRAM_VERSION, type Diagram } from "./types";
+import {
+	type Block,
+	BLOCK_TYPES,
+	type Connector,
+	DIAGRAM_VERSION,
+	type Diagram,
+	type Expose,
+	type Mapping,
+	SIDES,
+	type UIElement,
+} from "./types";
 
 export * from "./types";
 
 /** The canonical empty diagram. */
 export function emptyDiagram(): Diagram {
-	return { version: DIAGRAM_VERSION, blocks: [], connectors: [] };
+	return { version: DIAGRAM_VERSION, blocks: [], connectors: [], ui: [], mappings: [], exposes: [] };
 }
 
 /** Depth-first walk over every block, with its parent (null for roots). */
@@ -55,7 +65,33 @@ export function serialize(d: Diagram): string {
 }
 
 export function parse(json: string): Diagram {
-	return validate(JSON.parse(json) as unknown);
+	return validate(migrate(JSON.parse(json) as unknown));
+}
+
+/** Upgrade an older-version diagram in place to the current shape (v3 → v4 adds
+ *  the UI canvas + mappings; v4 → v5 adds the exposes relation; v5 → v6 gives
+ *  each expose a side + extent). Steps chain, so a v3 save is carried all the
+ *  way forward. Returns the same object; `validate` still gates it. */
+export function migrate(raw: unknown): unknown {
+	if (typeof raw !== "object" || raw === null) return raw;
+	const d = raw as Record<string, unknown>;
+	if (d.version === 3) {
+		d.version = 4;
+		d.ui ??= [];
+		d.mappings ??= [];
+	}
+	if (d.version === 4) {
+		d.version = 5;
+		d.exposes ??= [];
+	}
+	if (d.version === 5) {
+		d.version = DIAGRAM_VERSION;
+		for (const e of (d.exposes as Partial<Expose>[]) ?? []) {
+			e.side ??= "right";
+			e.extent ??= 120;
+		}
+	}
+	return d;
 }
 
 /** Validate an unknown value as a Diagram, throwing on the first problem. */
@@ -65,6 +101,9 @@ export function validate(raw: unknown): Diagram {
 	if (d.version !== DIAGRAM_VERSION) throw new Error(`Unsupported diagram version: ${String(d.version)}`);
 	if (!Array.isArray(d.blocks)) throw new Error("Diagram.blocks must be an array");
 	if (!Array.isArray(d.connectors)) throw new Error("Diagram.connectors must be an array");
+	if (!Array.isArray(d.ui)) throw new Error("Diagram.ui must be an array");
+	if (!Array.isArray(d.mappings)) throw new Error("Diagram.mappings must be an array");
+	if (!Array.isArray(d.exposes)) throw new Error("Diagram.exposes must be an array");
 
 	const ids = new Set<string>();
 	const check = (blocks: Block[]) => {
@@ -87,6 +126,37 @@ export function validate(raw: unknown): Diagram {
 		cIds.add(c.id);
 		if (!ids.has(c.source)) throw new Error(`Connector ${c.id} missing source: ${c.source}`);
 		if (!ids.has(c.target)) throw new Error(`Connector ${c.id} missing target: ${c.target}`);
+	}
+
+	const eIds = new Set<string>();
+	for (const e of d.ui as UIElement[]) {
+		if (!e.id) throw new Error("UI element missing id");
+		if (eIds.has(e.id)) throw new Error(`Duplicate UI element id: ${e.id}`);
+		eIds.add(e.id);
+	}
+
+	const mIds = new Set<string>();
+	for (const m of d.mappings as Mapping[]) {
+		if (!m.id) throw new Error("Mapping missing id");
+		if (mIds.has(m.id)) throw new Error(`Duplicate mapping id: ${m.id}`);
+		mIds.add(m.id);
+		if (!ids.has(m.blockId)) throw new Error(`Mapping ${m.id} references missing block: ${m.blockId}`);
+		if (!eIds.has(m.elementId)) throw new Error(`Mapping ${m.id} references missing UI element: ${m.elementId}`);
+	}
+
+	const xIds = new Set<string>();
+	const owners = new Set<string>();
+	for (const x of d.exposes as Expose[]) {
+		if (!x.id) throw new Error("Expose missing id");
+		if (xIds.has(x.id)) throw new Error(`Duplicate expose id: ${x.id}`);
+		xIds.add(x.id);
+		if (!ids.has(x.ownerId)) throw new Error(`Expose ${x.id} references missing owner: ${x.ownerId}`);
+		if (!ids.has(x.exposeId)) throw new Error(`Expose ${x.id} references missing box: ${x.exposeId}`);
+		if (x.ownerId === x.exposeId) throw new Error(`Expose ${x.id} owner and box are the same block`);
+		if (owners.has(x.ownerId)) throw new Error(`Block ${x.ownerId} has more than one expose`);
+		owners.add(x.ownerId);
+		if (!SIDES.includes(x.side)) throw new Error(`Expose ${x.id} has invalid side: ${x.side}`);
+		if (typeof x.extent !== "number") throw new Error(`Expose ${x.id} extent must be a number`);
 	}
 
 	return d as unknown as Diagram;
