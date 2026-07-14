@@ -152,3 +152,13 @@ Run and fix everything that breaks, on touched files:
 
 Refactors are behavior-preserving by default — preserve behavior exactly unless
 a behavior change was explicitly requested.
+
+## Terraform / infra
+
+State lives in **HCP Terraform** (org `atmagaming`, workspace `limn`), not on disk. There is no local
+`terraform.tfstate` — do not create one, and do not add a `backend` block.
+
+On a new machine: `terraform login`, then `cd infra && terraform init`. You also need
+`infra/terraform.tfvars` (holds `vercel_api_token` / `github_token`) — it is gitignored and not stored
+in HCP, since the workspace runs with `execution-mode: local`. Copy it from another machine or another
+one of these repos; the tokens are shared across them.
