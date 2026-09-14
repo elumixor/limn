@@ -1,8 +1,9 @@
 # Limn
 
-A diagram editor whose diagrams are meant to compile into structured LLM prompts
-for app code generation. Right now the focus is the editor; the codegen compiler
-will be added back over this model once the editing experience is right.
+A diagram editor whose diagrams compile into structured LLM prompts for app
+code generation. Draw the system, copy the prompt, hand it to a coding agent.
+Change the diagram, and the next prompt is a patch: only what changed and its
+neighbours.
 
 ## The model
 
@@ -22,6 +23,23 @@ their parent. **Connectors** relate two root blocks and have a `kind`
 "source → target"). See `src/lib/diagram/types.ts`.
 
 Plain JSON, zero-loss round-trip.
+
+## The prompt
+
+`patch(old, new)` is the core function (`src/lib/compiler/`). It is pure and
+deterministic: same two diagrams, same text.
+
+- With no baseline it emits a **build specification**: every root block as a
+  unit with its intent (comments), its parts (nested blocks as an indented
+  tree) and its relations (connectors, both directions).
+- After **Mark as built** the current diagram becomes the baseline. The prompt
+  turns into a **patch specification**: a change summary, removals, and the
+  full spec of every root block that changed plus the ones connected to it.
+  Layout is not semantic, so moving boxes changes nothing.
+
+Open the panel with the **Prompt** button or `P`. **Example** loads the
+reference diagram: the architecture of [pai](https://github.com/elumixor/pai)
+transcribed from its `docs/architecture.md` (`src/lib/examples/pai.ts`).
 
 ## The editor
 
@@ -44,6 +62,7 @@ a floating Save / Load dock. Everything is edited inline on the canvas.
   - `F` — add a child block to the selection
   - `A` — add a comment to the selection
   - `C` — start a connector from the selected block
+  - `P` — toggle the prompt panel
   - `Enter` — rename the selected block
   - `Delete` / `Backspace` — delete the selection
   - `⌘Z` / `Ctrl+Z` — undo, `⌘⇧Z` / `Ctrl+Y` — redo
@@ -66,7 +85,5 @@ bun run build    # production build
 
 ## Status
 
-Editor-first. The codegen compiler (the eventual product —
-`patch(old, new) -> prompt`) was removed when the model changed and will be
-rewritten over the `Block` model. Calling an LLM, auto test generation, and
+Editor + compiler. Calling an LLM from the app, auto test generation, and
 multi-file project management remain out of scope for now.

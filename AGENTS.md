@@ -7,9 +7,8 @@ covers architecture, conventions, and gotchas instead.
 ## What this is
 
 Limn is a freeform diagram editor (SvelteKit + Svelte 5). Diagrams are a tree of
-recursive `Block`s plus `Connector`s between root blocks, and are eventually
-meant to compile into structured LLM prompts (the compiler isn't in the tree
-yet — the editor is the current focus).
+recursive `Block`s plus `Connector`s, and compile into structured LLM prompts
+via `patch(old, new)` in `src/lib/compiler/`.
 
 ## Stack
 
@@ -50,11 +49,22 @@ Two domains, kept separate:
 
 No DOM, no Svelte, no editor state here. Plain JSON that round-trips losslessly.
 
+### `src/lib/compiler/` — diagram → prompt
+
+- `emit.ts` — pure prose emission per root block (intent, parts, relations).
+- `diff.ts` — semantic diff of two diagrams; layout keys are ignored.
+- `patch.ts` — `patch(old, new)`: build spec when `old` is empty, else a patch
+  spec covering changed roots and their connector neighbours. Unit-tested.
+
+`src/lib/examples/pai.ts` is the reference diagram (the pai architecture);
+loaded by the **Example** dock button.
+
 ### `src/lib/editor/` — the editor
 
 - `store.svelte.ts` — `EditorStore`, the single source of truth (`export const
   editor`). Owns the `Diagram`, selection, editing state, pending-connector
-  state, measured root sizes, pan offset, and all model mutations. Drives undo
+  state, measured root sizes, pan offset, the prompt `anchor` (baseline for
+  `patch`, persisted separately) and all model mutations. Drives undo
   via `History` and autosave via an `$effect.root`. **All model changes go
   through this class** — never mutate `editor.diagram` from a component.
 - `canvas-controller.svelte.ts` — `CanvasController`, the pointer-interaction
@@ -72,6 +82,7 @@ No DOM, no Svelte, no editor state here. Plain JSON that round-trips losslessly.
   events to the controller; holds almost no logic itself.
 - `BlockView.svelte` — recursive block renderer (renders itself for children).
 - `ContextMenu.svelte` — generic menu driven by a `MenuItem[]`.
+- `PromptPanel.svelte` — shows `editor.result.prompt`; copy, mark as built, reset.
 
 `src/routes/+page.svelte` is the page shell: global keyboard shortcuts, the
 Save/Load dock, and CSS variables (theme tokens).

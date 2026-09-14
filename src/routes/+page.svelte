@@ -2,6 +2,8 @@
 	import { isTextInput } from "$lib/editor/dom";
 	import { editor } from "$lib/editor/store.svelte";
 	import Canvas from "$lib/editor/Canvas.svelte";
+	import PromptPanel from "$lib/editor/PromptPanel.svelte";
+	import { PAI_EXAMPLE } from "$lib/examples/pai";
 
 	let fileInput: HTMLInputElement;
 	let mouse = { x: 0, y: 0 };
@@ -56,6 +58,9 @@
 			case "c":
 				editor.startConnectorFromSelected();
 				break;
+			case "p":
+				editor.showPrompt = !editor.showPrompt;
+				break;
 		}
 	}
 
@@ -94,6 +99,7 @@
 		<span><kbd>↵</kbd> rename</span>
 		<span><kbd>⌫</kbd> delete</span>
 		<span><kbd>⌘Z</kbd> undo</span>
+		<span><kbd>P</kbd> prompt</span>
 		<span class="dim">click to edit · drag to move · drag onto a box to nest · drag the dot to connect · autosaved</span>
 	</footer>
 
@@ -102,7 +108,12 @@
 	<div class="dock">
 		<button onclick={save}>Save</button>
 		<button onclick={() => fileInput.click()}>Load</button>
+		<button onclick={() => editor.load(PAI_EXAMPLE)}>Example</button>
+		<button class:active={editor.showPrompt} onclick={() => (editor.showPrompt = !editor.showPrompt)}>Prompt</button>
 	</div>
+	{#if editor.showPrompt}
+		<PromptPanel />
+	{/if}
 	<input bind:this={fileInput} type="file" accept="application/json" onchange={load} hidden />
 </div>
 
@@ -200,7 +211,8 @@
 		cursor: pointer;
 		transition: background 0.1s;
 	}
-	.dock button:hover {
+	.dock button:hover,
+	.dock button.active {
 		background: var(--accent);
 	}
 </style>

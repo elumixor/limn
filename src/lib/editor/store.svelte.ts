@@ -14,6 +14,7 @@ import {
 	serialize,
 	validate,
 } from "../diagram";
+import { patch } from "../compiler";
 import { History } from "./history";
 import {
 	DEFAULT_CHILD_H,
@@ -26,6 +27,8 @@ import {
 } from "./layout";
 
 const STORAGE_KEY = "limn.diagram.v3";
+/** The last diagram state the generated code is known to match (see `anchor`). */
+const ANCHOR_KEY = "limn.anchor.v3";
 
 /** Offset from a click point to a new block's top-left, so the box lands centred under the cursor. */
 const NEW_BLOCK_OFFSET = { x: 85, y: 20 } as const;
@@ -65,21 +68,27 @@ export type Editing =
 	| { id: string; part: "connector" }
 	| null;
 
-function loadInitial(): Diagram {
+function loadStored(key: string): Diagram {
 	if (typeof localStorage === "undefined") return emptyDiagram();
-	const saved = localStorage.getItem(STORAGE_KEY);
+	const saved = localStorage.getItem(key);
 	if (!saved) return emptyDiagram();
 	try {
 		const d = validate(JSON.parse(saved));
 		normalizeLayout(d);
 		return d;
 	} catch {
+		// A save from an older model version: better an empty canvas than a dead editor.
 		return emptyDiagram();
 	}
 }
 
 class EditorStore {
-	diagram = $state<Diagram>(loadInitial());
+	diagram = $state<Diagram>(loadStored(STORAGE_KEY));
+	/** Baseline for the prompt: what the code already implements. Empty means "build from scratch". */
+	anchor = $state<Diagram>(loadStored(ANCHOR_KEY));
+	/** The compiled prompt — re-derived on every model change. */
+	result = $derived(patch(this.anchor, this.diagram));
+	showPrompt = $state(false);
 	/** Selected block ids (multi-select). The last entry is the "primary". */
 	selectedBlocks = $state<string[]>([]);
 	selectedConnector = $state<string | null>(null);
@@ -406,13 +415,27 @@ class EditorStore {
 		this.pendingAnchor = null;
 	}
 
+	// ---- prompt -------------------------------------------------------------
+	/** Mark the current diagram as implemented: the next prompt becomes a patch against it. */
+	commitAnchor() {
+		this.anchor = validate(JSON.parse(serialize(this.diagram)));
+	}
+	/** Forget the baseline so the prompt goes back to a from-scratch build. */
+	resetAnchor() {
+		this.anchor = emptyDiagram();
+	}
+
 	// ---- import / export ----------------------------------------------------
 	exportJSON(): string {
 		return serialize(this.diagram);
 	}
 	loadJSON(json: string) {
+		this.load(validate(JSON.parse(json)));
+	}
+	/** Replace the whole diagram (deep-copied, so callers can keep their reference). */
+	load(diagram: Diagram) {
 		this.#record();
-		const d = validate(JSON.parse(json));
+		const d = validate(JSON.parse(serialize(diagram)));
 		normalizeLayout(d);
 		this.diagram = d;
 		this.clearSelection();
@@ -438,6 +461,9 @@ if (typeof window !== "undefined") {
 	$effect.root(() => {
 		$effect(() => {
 			localStorage.setItem(STORAGE_KEY, serialize(editor.diagram));
+		});
+		$effect(() => {
+			localStorage.setItem(ANCHOR_KEY, serialize(editor.anchor));
 		});
 	});
 }
