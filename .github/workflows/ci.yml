@@ -1,7 +1,6 @@
 name: CI
 
 # Every push type-checks; a green `main` is then deployed to Devkit Cloud through the dk-deploy OIDC role.
-# Vercel never deploys a push on its own (vercel.json).
 on:
   push:
   workflow_dispatch:
