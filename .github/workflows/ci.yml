@@ -1,7 +1,7 @@
 name: CI
 
-# Every push runs types and tests; a green `main` is then deployed to Devkit Cloud. Vercel never deploys a push
-# on its own (vercel.json).
+# Every push type-checks; a green `main` is then deployed to Devkit Cloud through the dk-deploy OIDC role.
+# Vercel never deploys a push on its own (vercel.json).
 on:
   push:
   workflow_dispatch:
@@ -9,18 +9,31 @@ on:
 permissions:
   contents: read
   id-token: write
-  deployments: write
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  app:
-    uses: elumixor/desk-infra/.github/workflows/web-app.yml@main
-    with:
-      postgres: false
-      playwright: false
-      develop-branch: ""
-      host: aws
-    secrets: inherit
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+
+  deploy:
+    needs: check
+    if: github.ref_name == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::453953529857:role/dk-deploy
+          aws-region: eu-central-1
+      - run: bun install --frozen-lockfile && bunx devkit deploy:aws
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
